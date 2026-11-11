@@ -1,38 +1,37 @@
-# Beauty Studio — Система онлайн-запису та CRM майстрів
+# Beauty Studio — Онлайн-запис та CRM для салону краси
 
-Сучасна модульна система онлайн-запису клієнтів (у стилі Altegio) та CRM для салону краси / майстрів краси з інтерактивною шахівницею розкладу, базою клієнтів, аналітикою виручки та сповіщеннями в Telegram.
+Модульна веб-система онлайн-запису клієнтів (стиль Altegio) та CRM для салону краси з інтерактивною шахівницею розкладу майстрів, базою клієнтів, підрахунком виручки та сповіщеннями в Telegram.
 
-## 📁 Структура репозиторію
+## 📁 Структура проєкту
 
-- `frontend/` — модульний клієнтський фронтенд та адмін-панель (ES Modules, Tailwind CSS, архітектурний підхід EasyAppointments)
-  - `frontend/index.html` — основна сторінка віджета та адмінки
-  - `frontend/js/app.js` — точка входу додатку
-  - `frontend/js/pages/` — сторінки (віджет запису `booking.js`, шахівниця `calendar.js`, налаштування `settings.js`, база клієнтів `clients.js`)
-  - `frontend/js/components/` — модальні вікна та навігація (`admin-bar.js`, `pin-modal.js`, `booking-modal.js`, `service-modal.js`)
-  - `frontend/js/http/` — API-клієнт з автоматичним перемиканням сервер/офлайн
-  - `frontend/js/state.js` — реактивний стан
-- `api-v2.php` — легкий бекенд на PHP (збереження даних у JSON, відправка сповіщень у Telegram Bot API)
-- `index-v2.html` — оригінальний монолітний прототип (збережено для довідки)
-- `easyappointments-main/` — референсна база коду EasyAppointments (архітектура бекенду та календарів)
+- `index.html` — головна сторінка сайту (віджет клієнта та адмін-панель)
+- `css/` — стилі (`styles.css`)
+- `js/` — модульний JavaScript (ES Modules):
+  - `app.js` — bootstrap додатку, ініціалізація
+  - `state.js` — централізований реактивний стан
+  - `config.js` — початкова конфігурація салону, послуги, майстри
+  - `http/api-client.js` — робота з бекендом, Telegram та offline-fallback
+  - `pages/` — сторінки: віджет запису (`booking.js`), шахівниця розкладу (`calendar.js`), налаштування (`settings.js`), клієнти (`clients.js`)
+  - `components/` — модальні вікна та панель майстра (`admin-bar.js`, `pin-modal.js`, `booking-modal.js`, `service-modal.js`)
+  - `utils/` — утиліти (`dom.js`, `time.js`, `format.js`)
+- `api-v2.php` — легкий PHP-бекенд (збереження даних у JSON, відправка сповіщень у Telegram Bot API)
+- `.gitignore` — виключення тимчасових файлів та динамічної бази `data/`
 
 ---
 
 ## 🚀 Розгортання та запуск на VPS сервері
 
-### 1. Вимоги до сервера
-- Будь-який Linux VPS (Ubuntu 22.04 / 24.04 або Debian 11 / 12)
-- Вебсервер **Nginx** або **Apache**
-- **PHP 8.0+** з розширенням `curl` (для Telegram-сповіщень) та `json`
+### 1. Вимоги
+- Linux VPS (Ubuntu 22.04 / 24.04 або Debian 11 / 12)
+- Вебсервер **Nginx**
+- **PHP 8.0+** з розширенням `curl` (для надсилання сповіщень у Telegram)
 
 ---
 
-### 2. Встановлення оточення на чистому VPS (Ubuntu/Debian)
+### 2. Встановлення оточення на сервері
 
 ```bash
-# Оновлення пакетів
 sudo apt update && sudo apt upgrade -y
-
-# Встановлення Nginx, PHP та curl
 sudo apt install -y nginx php-fpm php-curl php-json git
 ```
 
@@ -44,51 +43,48 @@ sudo apt install -y nginx php-fpm php-curl php-json git
 cd /var/www
 sudo git clone https://github.com/Maksxxx8/servis.git
 sudo chown -R www-data:www-data /var/www/servis
-sudo chmod -R 755 /var/www/servis
-
-# Важливо надати права на запис для каталогу даних бекенду:
 sudo chmod -R 775 /var/www/servis
 ```
 
 ---
 
-### 4. Налаштування Nginx
+### 4. Конфігурація Nginx
 
-Створіть конфігураційний файл сайту:
+Створіть файл конфігурації:
 ```bash
 sudo nano /etc/nginx/sites-available/servis
 ```
 
-Вставте наступну конфігурацію (замініть `your-domain.com` або вкажіть IP вашого VPS):
+Вставте конфігурацію (замініть `your-domain.com` на ваш домен або IP-адресу сервера, перевірте версію сокету php-fpm, наприклад `php8.2-fpm.sock` або `php8.3-fpm.sock`):
 
 ```nginx
 server {
     listen 80;
-    server_name your-domain.com; # або ваш IP-адрес
+    server_name your-domain.com; # або IP вашого VPS
 
-    # Кореневий каталог сайту
     root /var/www/servis;
-    index frontend/index.html;
+    index index.html;
 
+    # Відкриття сайту прямо за кореневою адресою https://your-domain.com/
     location / {
-        try_files $uri $uri/ /frontend/index.html;
+        try_files $uri $uri/ /index.html;
     }
 
-    # Обробка PHP скриптів (api-v2.php)
+    # Обробка бекенду api-v2.php
     location ~ \.php$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php-fpm.sock; # перевірте версію, наприклад php8.2-fpm.sock або php8.3-fpm.sock
+        fastcgi_pass unix:/var/run/php/php-fpm.sock;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
     }
 
-    # Захист каталогу даних з JSON файлом бази
+    # Захист каталогу даних з базою JSON від прямого перегляду у браузері
     location ^~ /data/ {
         deny all;
         return 403;
     }
 
-    # Кешування статичних файлів
+    # Кешування статичних ресурсів
     location ~* \.(css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
         expires 30d;
         add_header Cache-Control "public, no-transform";
@@ -96,7 +92,7 @@ server {
 }
 ```
 
-Активуйте сайт і перезавантажте Nginx:
+Активуйте конфігурацію та перезапустіть Nginx:
 ```bash
 sudo ln -s /etc/nginx/sites-available/servis /etc/nginx/sites-enabled/
 sudo nginx -t
@@ -105,7 +101,7 @@ sudo systemctl reload nginx
 
 ---
 
-### 5. Підключення безкоштовного SSL (HTTPS) через Certbot
+### 5. Підключення безкоштовного SSL (HTTPS)
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
@@ -114,11 +110,12 @@ sudo certbot --nginx -d your-domain.com
 
 ---
 
-### 6. Доступ та використання
+### 6. Адреси доступу
 
-- **Клієнтський віджет онлайн-запису**: `https://your-domain.com/frontend/`
-- **Вхід для майстрів / адмінка**: 
-  - Натисніть посилання «🔒 Вхід для майстрів» внизу віджета або відкрийте `https://your-domain.com/frontend/?admin=1`
-  - Стандартний PIN-код: **`1234`** (змінюється у розділі *«⚙️ Налаштування та Послуги»*)
-- **Telegram-сповіщення**: 
-  - В розділі *«⚙️ Налаштування та Послуги»* вкажіть токен вашого Telegram-бота (`set-tg-token`), щоб майстри миттєво отримували сповіщення про нові онлайн-записи клієнтів.
+- **Головна сторінка (віджет онлайн-запису)**: `https://your-domain.com/`
+- **Панель керування майстра**:
+  - Натисніть **«🔒 Вхід для майстрів»** унизу віджета або перейдіть за прямою адресою: `https://your-domain.com/?admin=1`
+  - PIN-код за замовчуванням: **`1234`**
+- **Сповіщення у Telegram**:
+  - У розділі *«⚙️ Налаштування та Послуги»* вкажіть **Telegram Bot Token** вашого бота
+  - Майстри автоматично отримуватимуть картку клієнта одразу після оформлення онлайн-запису.
