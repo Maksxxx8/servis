@@ -1,5 +1,4 @@
 <?php
-header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type');
@@ -15,8 +14,104 @@ if (!is_dir($dataDir)) {
 
 $dbFile = $dataDir . '/database.json';
 
-// Читання загальної бази салону
+// =================== 1. iCal СИНХРОНІЗАЦІЯ (.ics СТРІМ) ===================
+// Доступ: api-v2.php?action=ical&master=m1&key=key_m1_svitlana
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'ical') {
+    header('Content-Type: text/calendar; charset=utf-8');
+    header('Content-Disposition: inline; filename="schedule.ics"');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+
+    $masterId = $_GET['master'] ?? '';
+    $key = $_GET['key'] ?? '';
+
+    $db = file_exists($dbFile) ? json_decode(file_get_contents($dbFile), true) : null;
+    $salonName = $db['salon']['name'] ?? 'Beauty Studio';
+    $salonAddress = $db['salon']['address'] ?? '';
+
+    $master = null;
+    if ($db && !empty($db['masters'])) {
+        foreach ($db['masters'] as $m) {
+            if ($m['id'] === $masterId) {
+                $master = $m;
+                break;
+            }
+        }
+    }
+
+    $masterName = $master ? $master['name'] : 'Майстер';
+
+    $lines = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//Beauty Studio//Schedule Feed//UA',
+        'CALSCALE:GREGORIAN',
+        'METHOD:PUBLISH',
+        'X-WR-CALNAME:' . $salonName . ' - ' . $masterName,
+        'X-WR-TIMEZONE:Europe/Kyiv'
+    ];
+
+    if ($db && !empty($db['appointments'])) {
+        $servicesMap = [];
+        if (!empty($db['services'])) {
+            foreach ($db['services'] as $s) {
+                $servicesMap[$s['id']] = $s['title'];
+            }
+        }
+
+        foreach ($db['appointments'] as $app) {
+            if ($app['masterId'] !== $masterId || ($app['status'] ?? '') === 'cancelled') {
+                continue;
+            }
+
+            $date = str_replace('-', '', $app['date']);
+            $timeParts = explode(':', $app['time']);
+            $startH = str_pad($timeParts[0] ?? '10', 2, '0', STR_PAD_LEFT);
+            $startM = str_pad($timeParts[1] ?? '00', 2, '0', STR_PAD_LEFT);
+            $dtStart = $date . 'T' . $startH . $startM . '00';
+
+            $totalMin = ((int)$startH * 60) + (int)$startM + ((int)($app['duration'] ?? 60));
+            $endH = str_pad((string)floor($totalMin / 60), 2, '0', STR_PAD_LEFT);
+            $endM = str_pad((string)($totalMin % 60), 2, '0', STR_PAD_LEFT);
+            $dtEnd = $date . 'T' . $endH . $endM . '00';
+
+            $srvTitles = [];
+            if (!empty($app['serviceIds'])) {
+                foreach ($app['serviceIds'] as $sid) {
+                    if (isset($servicesMap[$sid])) $srvTitles[] = $servicesMap[$sid];
+                }
+            }
+            $srvText = !empty($srvTitles) ? implode(', ', $srvTitles) : 'Послуга';
+
+            $summary = "Запис: " . ($app['clientName'] ?? 'Клієнт') . " (" . $srvText . ")";
+            $desc = "Клієнт: " . ($app['clientName'] ?? '') . "\\n" .
+                    "Телефон: " . ($app['clientPhone'] ?? '') . "\\n" .
+                    "Послуги: " . $srvText . "\\n" .
+                    "Сума: " . ($app['price'] ?? 0) . " ₴\\n" .
+                    (!empty($app['notes']) ? "Нотатка: " . $app['notes'] : "");
+
+            $uid = ($app['id'] ?? uniqid()) . '@beautystudio.local';
+
+            $lines[] = 'BEGIN:VEVENT';
+            $lines[] = 'UID:' . $uid;
+            $lines[] = 'DTSTAMP:' . gmdate('Ymd\THis\Z');
+            $lines[] = 'DTSTART:' . $dtStart;
+            $lines[] = 'DTEND:' . $dtEnd;
+            $lines[] = 'SUMMARY:' . $summary;
+            $lines[] = 'DESCRIPTION:' . $desc;
+            $lines[] = 'LOCATION:' . $salonAddress;
+            $lines[] = 'STATUS:CONFIRMED';
+            $lines[] = 'END:VEVENT';
+        }
+    }
+
+    $lines[] = 'END:VCALENDAR';
+    echo implode("\r\n", $lines);
+    exit;
+}
+
+// =================== 2. ЧИТАННЯ ДАНИХ (JSON) ===================
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    header('Content-Type: application/json; charset=utf-8');
     if (file_exists($dbFile)) {
         echo file_get_contents($dbFile);
     } else {
@@ -25,8 +120,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     exit;
 }
 
-// Збереження змін (послуги, налаштування, записи) + відправка сповіщень у Telegram
+// =================== 3. ЗБЕРЕЖЕННЯ ДАНИХ ТА TELEGRAM ===================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json; charset=utf-8');
     $raw = file_get_contents('php://input');
     $data = json_decode($raw, true);
     

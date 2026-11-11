@@ -1,5 +1,5 @@
 /**
- * components/service-modal.js — Модальне вікно додавання / редагування послуги
+ * components/service-modal.js — Модальне вікно додавання / редагування послуги з підтримкою буферного часу
  */
 
 import state from '../state.js';
@@ -24,12 +24,14 @@ export function openServiceModal(serviceId = null) {
     $('edit-service-master').value = s.masterId;
     $('edit-service-title').value = s.title;
     $('edit-service-duration').value = s.duration;
+    $('edit-service-buffer').value = s.bufferTime !== undefined ? s.bufferTime : 15;
     $('edit-service-price').value = s.price;
   } else {
     $('service-modal-title').textContent = 'Нова послуга';
     $('edit-service-id').value = '';
     $('edit-service-title').value = '';
     $('edit-service-duration').value = 60;
+    $('edit-service-buffer').value = 15;
     $('edit-service-price').value = 500;
   }
 
@@ -51,15 +53,18 @@ export async function saveServiceFromModal() {
   const masterId = $('edit-service-master').value;
   const title = $('edit-service-title').value.trim();
   const duration = Number($('edit-service-duration').value) || 60;
+  const bufferTime = Number($('edit-service-buffer').value) || 0;
   const price = Number($('edit-service-price').value) || 0;
 
   if (!title) return alert('Введіть назву послуги');
 
+  const payload = { id: id || ('s' + Date.now()), masterId, title, duration, bufferTime, price };
+
   if (id) {
     const idx = state.db.services.findIndex(x => x.id === id);
-    if (idx > -1) state.db.services[idx] = { id, masterId, title, duration, price };
+    if (idx > -1) state.db.services[idx] = payload;
   } else {
-    state.db.services.push({ id: 's' + Date.now(), masterId, title, duration, price });
+    state.db.services.push(payload);
   }
 
   closeServiceModal();

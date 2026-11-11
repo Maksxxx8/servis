@@ -1,15 +1,25 @@
-/* Beauty Studio — дополнительные стили */
+/* Beauty Studio — додаткові стилі */
 
 body {
   font-family: 'Inter', sans-serif;
   background-color: #f8fafc;
 }
 
-/* Скрыть скроллбар */
+/* Сховати скроллбар */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* Діагональна штриховка для неробочих годин */
+.pattern-diagonal-stripes {
+  background-image: repeating-linear-gradient(45deg, #f1f5f9 0, #f1f5f9 10px, #f8fafc 10px, #f8fafc 20px);
+}
+
+/* Штриховка для буферного часу */
+.pattern-buffer-stripes {
+  background-image: repeating-linear-gradient(45deg, #fef3c7 0, #fef3c7 6px, #fffbeb 6px, #fffbeb 12px);
 }

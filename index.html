@@ -12,17 +12,18 @@
 
   <!-- ВЕРХНЯ ПАНЕЛЬ АДМІНІСТРАТОРА (Прихована для клієнтів, видима тільки після введення PIN) -->
   <div id="admin-bar" class="hidden bg-slate-900 text-white px-4 py-2.5 text-sm shadow-md sticky top-0 z-50">
-    <div class="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-2">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-3">
         <span class="font-semibold tracking-wide flex items-center gap-1.5">
           <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" id="server-indicator"></span>
           <span id="server-status-text">Режим Майстра</span>
         </span>
-        <div class="flex bg-slate-800 rounded-lg p-0.5 text-xs">
+        <div class="flex flex-wrap bg-slate-800 rounded-lg p-0.5 text-xs gap-1">
           <button id="tab-client" class="px-3 py-1.5 rounded-md transition">📱 Віджет клієнта</button>
           <button id="tab-calendar" class="px-3 py-1.5 rounded-md transition bg-indigo-600 text-white font-medium">📅 Шахівниця</button>
-          <button id="tab-settings" class="px-3 py-1.5 rounded-md transition">⚙️ Налаштування та Послуги</button>
-          <button id="tab-clients" class="px-3 py-1.5 rounded-md transition">👥 Клієнти</button>
+          <button id="tab-schedule" class="px-3 py-1.5 rounded-md transition text-slate-300 hover:text-white">🗓️ Графік та Буфери</button>
+          <button id="tab-settings" class="px-3 py-1.5 rounded-md transition text-slate-300 hover:text-white">⚙️ Налаштування</button>
+          <button id="tab-clients" class="px-3 py-1.5 rounded-md transition text-slate-300 hover:text-white">👥 Клієнти</button>
         </div>
       </div>
       <div class="flex items-center gap-2">
@@ -36,7 +37,7 @@
 
     <!-- ================= 1. КЛІЄНТСЬКИЙ ВІДЖЕТ (У СТИЛІ ALTEGIO) ================= -->
     <div id="view-client" class="flex-1 flex flex-col items-center justify-start py-4 px-3 sm:py-8">
-      <div class="w-full max-w-md bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden flex flex-col min-h-[620px]">
+      <div class="w-full max-w-md bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden flex flex-col min-h-[640px]">
         
         <!-- Шапка салону -->
         <div class="bg-gradient-to-r from-slate-900 to-indigo-950 text-white p-5 relative">
@@ -93,7 +94,7 @@
           <div id="widget-step-3" class="hidden space-y-4 flex-1 flex flex-col">
             <div class="flex items-center justify-between">
               <button data-step-nav="2" class="text-xs text-indigo-600 font-medium hover:underline">← До послуг</button>
-              <span id="step3-summary" class="text-xs text-slate-500"></span>
+              <span id="step3-summary" class="text-xs text-slate-500 text-right"></span>
             </div>
             <div>
               <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Дата візиту</label>
@@ -140,11 +141,11 @@
           </div>
 
           <!-- КРОК 5: УСПІШНИЙ ЗАПИС -->
-          <div id="widget-step-5" class="hidden text-center py-8 space-y-4 my-auto">
+          <div id="widget-step-5" class="hidden text-center py-6 space-y-4 my-auto">
             <div class="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-3xl mx-auto">✓</div>
             <h2 class="text-xl font-bold text-slate-800">Ви успішно записані!</h2>
             <p id="success-details" class="text-sm text-slate-600 max-w-xs mx-auto"></p>
-            <div class="pt-4">
+            <div class="pt-2">
               <button data-action="reset-widget" class="text-sm text-indigo-600 font-semibold hover:underline">Створити ще один запис</button>
             </div>
           </div>
@@ -152,7 +153,7 @@
         </div>
       </div>
 
-      <!-- Непомітна кнопка входу для майстрів -->
+      <!-- Кнопка входу для майстрів -->
       <div class="mt-6 text-center">
         <button data-action="open-pin" class="text-xs text-slate-400 hover:text-slate-600 transition flex items-center gap-1 mx-auto">
           <span>🔒 Вхід для майстрів</span>
@@ -160,35 +161,71 @@
       </div>
     </div>
 
-    <!-- ================= 2. АДМІНКА: ШАХІВНИЦЯ РОЗКЛАДУ ================= -->
-    <div id="view-calendar" class="hidden flex-1 max-w-6xl w-full mx-auto p-4 space-y-4">
+    <!-- ================= 2. АДМІНКА: ШАХІВНИЦЯ РОЗКЛАДУ (3 РЕЖИМИ) ================= -->
+    <div id="view-calendar" class="hidden flex-1 max-w-7xl w-full mx-auto p-4 space-y-4">
+      <!-- Верхній тулбар календаря -->
       <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+        <!-- Навігація дат -->
         <div class="flex items-center gap-2">
-          <button data-action="date-prev" class="p-2 rounded-lg border hover:bg-slate-50">←</button>
+          <button id="btn-cal-prev" class="p-2 rounded-lg border hover:bg-slate-50 transition" title="Попередній">←</button>
           <input type="date" id="admin-date-picker" class="border border-slate-200 rounded-xl px-3 py-1.5 text-sm font-semibold">
-          <button data-action="date-next" class="p-2 rounded-lg border hover:bg-slate-50">→</button>
-          <button data-action="date-today" class="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg font-medium">Сьогодні</button>
+          <button id="btn-cal-next" class="p-2 rounded-lg border hover:bg-slate-50 transition" title="Наступний">→</button>
+          <button id="btn-cal-today" class="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg font-medium transition">Сьогодні</button>
+          <span id="admin-cal-period-title" class="text-xs font-bold text-slate-700 ml-2"></span>
         </div>
-        <div class="flex items-center gap-4 text-xs">
-          <div id="admin-revenue-summary" class="font-semibold text-slate-700"></div>
-          <button data-action="new-booking" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-semibold shadow-sm transition">
-            + Записати клієнта
+
+        <!-- Перемикач режимів: День / Тиждень / Місяць -->
+        <div class="flex items-center gap-2">
+          <div class="flex bg-slate-100 p-1 rounded-xl text-xs font-semibold gap-1">
+            <button id="cal-mode-day" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold transition text-xs shadow-sm">📅 День</button>
+            <button id="cal-mode-week" class="px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 transition text-xs font-medium">📆 Тиждень</button>
+            <button id="cal-mode-month" class="px-3 py-1.5 rounded-lg text-slate-600 hover:text-slate-900 transition text-xs font-medium">🗓️ Місяць</button>
+          </div>
+
+          <!-- Фільтр майстра -->
+          <select id="cal-master-filter" class="border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-semibold bg-white">
+            <option value="all">👥 Всі майстри</option>
+            <option value="m1">✨ Світлана</option>
+            <option value="m2">💅 Марія</option>
+          </select>
+        </div>
+
+        <!-- Швидкі дії -->
+        <div class="flex items-center gap-2">
+          <button id="btn-cal-new-booking" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-xl text-xs font-semibold shadow-sm transition">
+            + Запис
+          </button>
+          <button id="btn-cal-new-timeblock" class="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 px-3 py-2 rounded-xl text-xs font-semibold transition">
+            ☕ Перерва
+          </button>
+          <button id="btn-cal-edit-override" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-xl text-xs font-semibold transition">
+            ⚙️ Графік дня
           </button>
         </div>
       </div>
 
-      <!-- Сітка шахівниці на двох майстрів -->
-      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div class="grid grid-cols-12 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600">
-          <div class="col-span-2 sm:col-span-1 p-3 text-center border-r border-slate-200">Час</div>
-          <div class="col-span-5 sm:col-span-5 p-3 border-r border-slate-200" id="cal-header-m1">Світлана (Брови)</div>
-          <div class="col-span-5 sm:col-span-6 p-3" id="cal-header-m2">Марія (Манікюр)</div>
-        </div>
-        <div id="calendar-grid-body" class="divide-y divide-slate-100 text-xs"></div>
-      </div>
+      <!-- Зведення виручки -->
+      <div id="admin-revenue-summary" class="text-xs font-semibold text-slate-700 px-2"></div>
+
+      <!-- Контейнер сітки календаря (динамічний рендер дня, тижня або місяця) -->
+      <div id="calendar-content-container"></div>
     </div>
 
-    <!-- ================= 3. АДМІНКА: НАЛАШТУВАННЯ САЛОНУ ТА ПРАЙС-ЛИСТ ================= -->
+    <!-- ================= 3. АДМІНКА: ОСОБИСТИЙ КАБІНЕТ МАЙСТРА («МІЙ ГРАФІК ТА БУФЕРИ») ================= -->
+    <div id="view-schedule" class="hidden flex-1 max-w-6xl w-full mx-auto p-4 space-y-6">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-lg font-bold text-slate-800">Особистий кабінет майстра</h2>
+          <p class="text-xs text-slate-500">Гнучке керування шаблоном тижня, буферами, разовими відлучками та iCal-підпискою</p>
+        </div>
+        <!-- Вкладки майстрів -->
+        <div id="schedule-master-tabs" class="flex gap-2"></div>
+      </div>
+
+      <div id="schedule-cabinet-content" class="space-y-6"></div>
+    </div>
+
+    <!-- ================= 4. АДМІНКА: НАЛАШТУВАННЯ САЛОНУ ТА ПРАЙС-ЛИСТ ================= -->
     <div id="view-settings" class="hidden flex-1 max-w-4xl w-full mx-auto p-4 space-y-6">
       
       <!-- Блок 1: Назва салону, години роботи та PIN -->
@@ -204,11 +241,11 @@
             <input type="text" id="set-salon-address" class="w-full border rounded-xl px-3 py-2">
           </div>
           <div>
-            <label class="block text-xs text-slate-500 mb-1">Початок робочого дня (година, напр. 9)</label>
+            <label class="block text-xs text-slate-500 mb-1">Початок робочого дня (загальний, напр. 9)</label>
             <input type="number" id="set-work-start" min="6" max="15" class="w-full border rounded-xl px-3 py-2">
           </div>
           <div>
-            <label class="block text-xs text-slate-500 mb-1">Кінець робочого дня (година, напр. 20)</label>
+            <label class="block text-xs text-slate-500 mb-1">Кінець робочого дня (загальний, напр. 20)</label>
             <input type="number" id="set-work-end" min="15" max="23" class="w-full border rounded-xl px-3 py-2">
           </div>
           <div>
@@ -216,7 +253,7 @@
             <input type="text" id="set-admin-pin" class="w-full border rounded-xl px-3 py-2 font-mono">
           </div>
           <div>
-            <label class="block text-xs text-slate-500 mb-1">Telegram Bot Token (необов'язково)</label>
+            <label class="block text-xs text-slate-500 mb-1">Telegram Bot Token (для сповіщень)</label>
             <input type="text" id="set-tg-token" placeholder="123456:ABC-DEF..." class="w-full border rounded-xl px-3 py-2 font-mono text-xs">
           </div>
         </div>
@@ -237,7 +274,7 @@
       <!-- Блок 3: Редактор переліку послуг -->
       <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
         <div class="flex items-center justify-between">
-          <h2 class="text-base font-bold text-slate-800">3. Перелік послуг та ціни</h2>
+          <h2 class="text-base font-bold text-slate-800">3. Перелік послуг, ціни та буфери</h2>
           <button data-action="add-service" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition">
             + Додати послугу
           </button>
@@ -247,7 +284,7 @@
 
     </div>
 
-    <!-- ================= 4. АДМІНКА: БАЗА КЛІЄНТІВ ================= -->
+    <!-- ================= 5. АДМІНКА: БАЗА КЛІЄНТІВ ================= -->
     <div id="view-clients" class="hidden flex-1 max-w-4xl w-full mx-auto p-4 space-y-4">
       <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
         <h2 class="text-base font-bold text-slate-800">База клієнтів та історія записів</h2>
@@ -285,14 +322,18 @@
           <label class="block text-xs text-slate-500 mb-1">Назва послуги</label>
           <input type="text" id="edit-service-title" placeholder="Корекція та фарбування брів" class="w-full border rounded-xl px-3 py-2">
         </div>
-        <div class="grid grid-cols-2 gap-2">
+        <div class="grid grid-cols-3 gap-2">
           <div>
-            <label class="block text-xs text-slate-500 mb-1">Тривалість (хв)</label>
-            <input type="number" id="edit-service-duration" step="15" value="60" class="w-full border rounded-xl px-3 py-2">
+            <label class="block text-xs text-slate-500 mb-1">Час (хв)</label>
+            <input type="number" id="edit-service-duration" step="15" value="60" class="w-full border rounded-xl px-2.5 py-2">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Буфер (хв)</label>
+            <input type="number" id="edit-service-buffer" step="5" value="15" class="w-full border rounded-xl px-2.5 py-2">
           </div>
           <div>
             <label class="block text-xs text-slate-500 mb-1">Ціна (₴)</label>
-            <input type="number" id="edit-service-price" step="50" value="500" class="w-full border rounded-xl px-3 py-2">
+            <input type="number" id="edit-service-price" step="50" value="500" class="w-full border rounded-xl px-2.5 py-2">
           </div>
         </div>
       </div>
@@ -308,7 +349,7 @@
     <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
       <div class="flex items-center justify-between">
         <h3 class="font-bold text-base" id="booking-modal-title">Запис клієнта</h3>
-        <button data-action="close-booking" class="text-slate-400 hover:text-slate-600">✕</button>
+        <button data-action="close-booking" class="text-slate-400 hover:text-slate-600 text-lg">✕</button>
       </div>
       <input type="hidden" id="modal-booking-id">
       <div class="space-y-3 text-sm">
@@ -343,6 +384,16 @@
         </div>
         <div class="grid grid-cols-2 gap-2">
           <div>
+            <label class="block text-xs text-slate-500 mb-1">Тривалість послуги (хв)</label>
+            <input type="number" id="modal-booking-duration" step="15" value="60" class="w-full border rounded-xl px-3 py-2 font-semibold">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Технічний буфер (хв)</label>
+            <input type="number" id="modal-booking-buffer" step="5" value="15" class="w-full border rounded-xl px-3 py-2 font-semibold">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
             <label class="block text-xs text-slate-500 mb-1">Ім'я клієнта</label>
             <input type="text" id="modal-booking-client" class="w-full border rounded-xl px-3 py-2">
           </div>
@@ -352,16 +403,156 @@
           </div>
         </div>
         <div>
-          <label class="block text-xs text-slate-500 mb-1">Нотатка майстра (формула фарби, база/гель, особливості)</label>
+          <label class="block text-xs text-slate-500 mb-1">Нотатка майстра (формула фарби, особливості)</label>
           <textarea id="modal-booking-notes" rows="2" class="w-full border rounded-xl px-3 py-2" placeholder="Наприклад: фарба графіт + коричневий 1:1..."></textarea>
         </div>
       </div>
+
+      <!-- Кнопки експорту в календар -->
+      <div id="modal-booking-calendar-actions" class="hidden flex gap-2 pt-2 border-t border-slate-100">
+        <button type="button" data-action="modal-export-google" class="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition flex items-center justify-center gap-1.5">
+          <span>📅</span> Google Calendar
+        </button>
+        <button type="button" data-action="modal-export-ics" class="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition flex items-center justify-center gap-1.5">
+          <span>📥</span> .ics файл
+        </button>
+      </div>
+
       <div class="flex items-center justify-between pt-2 gap-2">
         <button id="btn-delete-booking" class="hidden py-2.5 px-3 rounded-xl bg-rose-50 text-rose-600 text-xs font-semibold">Видалити</button>
         <div class="flex gap-2 ml-auto">
           <button data-action="cancel-booking" class="py-2.5 px-4 rounded-xl border text-xs font-semibold">Скасувати</button>
           <button data-action="save-booking" class="py-2.5 px-5 rounded-xl bg-indigo-600 text-white text-xs font-semibold">Зберегти</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- МОДАЛЬНЕ ВІКНО ШВИДКИХ ДІЙ ЗІ СЛОТОМ ЧАСУ -->
+  <div id="slot-action-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-xs w-full p-5 shadow-2xl space-y-3 text-center">
+      <div class="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto text-lg font-bold">⏱️</div>
+      <h3 class="font-bold text-sm text-slate-800">Дія для вільного слота</h3>
+      <p id="slot-action-info" class="text-xs text-slate-500 font-medium"></p>
+      
+      <div class="space-y-2 pt-2">
+        <button type="button" id="btn-slot-create-booking" class="w-full py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition flex items-center justify-center gap-2">
+          <span>+</span> Записати клієнта
+        </button>
+        <button type="button" id="btn-slot-create-break" class="w-full py-2.5 px-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-semibold transition flex items-center justify-center gap-2">
+          <span>☕</span> Перерва / Особистий час
+        </button>
+        <button type="button" id="btn-slot-edit-day" class="w-full py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition flex items-center justify-center gap-2">
+          <span>⚙️</span> Змінити графік на цей день
+        </button>
+      </div>
+
+      <button type="button" id="btn-close-slot-action" class="w-full py-2 text-xs text-slate-400 hover:text-slate-600">
+        Скасувати
+      </button>
+    </div>
+  </div>
+
+  <!-- МОДАЛЬНЕ ВІКНО ДОДАВАННЯ TIMEBLOCK (ПЕРЕРВА / ОСОБИСТИЙ ЧАС) -->
+  <div id="timeblock-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+      <h3 class="font-bold text-base text-slate-800">☕ Перерва / Особистий час (TimeBlock)</h3>
+      <div class="space-y-3 text-sm">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Майстер</label>
+          <select id="tb-modal-master" class="w-full border rounded-xl px-3 py-2"></select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Дата</label>
+          <input type="date" id="tb-modal-date" class="w-full border rounded-xl px-3 py-2 font-semibold">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Початок</label>
+            <input type="time" id="tb-modal-start" class="w-full border rounded-xl px-3 py-2 font-semibold">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Кінець</label>
+            <input type="time" id="tb-modal-end" class="w-full border rounded-xl px-3 py-2 font-semibold">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Причина / Нотатка</label>
+          <input type="text" id="tb-modal-reason" value="☕ Особистий час / Перерва" class="w-full border rounded-xl px-3 py-2">
+        </div>
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button type="button" id="btn-cancel-timeblock" class="flex-1 py-2.5 rounded-xl border text-xs font-semibold">Скасувати</button>
+        <button type="button" id="btn-save-timeblock" class="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold">Встановити перерву</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- МОДАЛЬНЕ ВІКНО ВИНЯТКУ ДАТИ (DATE OVERRIDE) -->
+  <div id="override-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+      <h3 class="font-bold text-base text-slate-800">🗓️ Виняток графіка на дату</h3>
+      <div class="space-y-3 text-sm">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Майстер</label>
+          <select id="override-modal-master" class="w-full border rounded-xl px-3 py-2"></select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Дата</label>
+          <input type="date" id="override-modal-date" class="w-full border rounded-xl px-3 py-2 font-semibold">
+        </div>
+        
+        <div class="space-y-2 pt-1">
+          <label class="block text-xs font-semibold text-slate-600">Тип винятку:</label>
+          <div class="flex items-center gap-2">
+            <input type="radio" id="override-type-dayoff" name="override_type" value="day_off" checked class="text-indigo-600">
+            <label for="override-type-dayoff" class="text-xs text-slate-700 font-medium">🏖️ Зробити повним вихідним</label>
+          </div>
+          <div class="flex items-center gap-2">
+            <input type="radio" id="override-type-hours" name="override_type" value="custom_hours" class="text-indigo-600">
+            <label for="override-type-hours" class="text-xs text-slate-700 font-medium">⏰ Встановити індивідуальні години</label>
+          </div>
+          <div class="flex items-center gap-2">
+            <input type="radio" id="override-type-reset" name="override_type" value="reset" class="text-indigo-600">
+            <label for="override-type-reset" class="text-xs text-slate-500">🔄 Скинути виняток (повернути шаблон тижня)</label>
+          </div>
+        </div>
+
+        <div id="override-hours-container" class="hidden grid grid-cols-2 gap-2 pt-2 border-t border-slate-100">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Початок роботи</label>
+            <input type="time" id="override-start" value="10:00" class="w-full border rounded-xl px-3 py-1.5 font-semibold">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Кінець роботи</label>
+            <input type="time" id="override-end" value="17:00" class="w-full border rounded-xl px-3 py-1.5 font-semibold">
+          </div>
+        </div>
+      </div>
+
+      <div class="flex gap-2 pt-2">
+        <button type="button" id="btn-cancel-override" class="flex-1 py-2.5 rounded-xl border text-xs font-semibold">Скасувати</button>
+        <button type="button" id="btn-save-override" class="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold">Зберегти виняток</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- МОДАЛЬНЕ ВІКНО ДЕТЕКТОРА КОНФЛІКТІВ -->
+  <div id="conflict-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
+      <div class="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto text-2xl">⚠️</div>
+      <h3 class="font-bold text-base text-slate-800 text-center">Виявлено конфлікт розкладу!</h3>
+      <p id="conflict-warning-text" class="text-xs text-slate-600 text-center"></p>
+
+      <div id="conflict-bookings-list" class="space-y-2 max-h-60 overflow-y-auto pr-1"></div>
+
+      <div class="flex flex-col gap-2 pt-2">
+        <button type="button" id="btn-conflict-keep-exception" class="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold transition">
+          Залишити як виняток (записи залишаються)
+        </button>
+        <button type="button" id="btn-close-conflict" class="w-full py-2 rounded-xl border text-xs font-semibold text-slate-600 hover:bg-slate-50 transition">
+          Скасувати зміни графіка
+        </button>
       </div>
     </div>
   </div>

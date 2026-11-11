@@ -1,18 +1,15 @@
 /**
  * pages/booking.js — Клієнтський віджет онлайн-запису (кроки 1–5)
- *
- * Крок 1: Вибір майстра
- * Крок 2: Вибір послуг
- * Крок 3: Вибір дати та часу
- * Крок 4: Контактні дані та підтвердження
- * Крок 5: Успіх
+ * З підтримкою 3-рівневого розкладу, буферного часу, підказки вільних дат та експорту в календар
  */
 
 import state from '../state.js';
 import { $, show, hide, toggle } from '../utils/dom.js';
-import { timeToMin, minToTime } from '../utils/time.js';
 import { todayStr } from '../config.js';
 import { saveDatabase } from '../http/api-client.js';
+import { calculateAvailableSlots, findNextAvailableDays, generateGoogleCalendarUrl, downloadIcsFile } from '../utils/schedule.js';
+
+let lastCreatedBooking = null;
 
 // =================== РЕНДЕР МАЙСТРІВ (Крок 1) ===================
 
@@ -34,7 +31,6 @@ export function renderWidgetMasters() {
     </div>
   `).join('');
 
-  // Навісити обробники
   container.querySelectorAll('[data-master-id]').forEach(el => {
     el.addEventListener('click', () => selectMaster(el.dataset.masterId));
   });
@@ -62,11 +58,16 @@ export function renderWidgetServices() {
 
   container.innerHTML = list.map(s => {
     const checked = state.widget.serviceIds.includes(s.id);
+    const buf = s.bufferTime !== undefined ? s.bufferTime : (master ? master.globalBuffer || 15 : 15);
     return `
       <div data-service-id="${s.id}" class="p-3.5 rounded-2xl border ${checked ? 'border-indigo-600 bg-indigo-50/50' : 'border-slate-200 hover:border-slate-300'} cursor-pointer transition flex items-center justify-between gap-3">
         <div>
           <div class="font-semibold text-sm text-slate-800">${s.title}</div>
-          <div class="text-xs text-slate-500 mt-0.5">⏱ ${s.duration} хв</div>
+          <div class="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
+            <span>⏱ ${s.duration} хв</span>
+            <span class="text-slate-400">•</span>
+            <span class="text-amber-700 font-medium">⌛ +${buf} хв буфер</span>
+          </div>
         </div>
         <div class="flex items-center gap-3">
           <span class="font-bold text-sm text-slate-900 whitespace-nowrap">${s.price} ₴</span>
@@ -78,12 +79,10 @@ export function renderWidgetServices() {
     `;
   }).join('');
 
-  // Навісити обробники
   container.querySelectorAll('[data-service-id]').forEach(el => {
     el.addEventListener('click', () => toggleService(el.dataset.serviceId));
   });
 
-  // Підсумок
   const selectedObjs = state.db.services.filter(s => state.widget.serviceIds.includes(s.id));
   const totalDur = selectedObjs.reduce((acc, s) => acc + Number(s.duration), 0);
   const totalPrice = selectedObjs.reduce((acc, s) => acc + Number(s.price), 0);
@@ -111,39 +110,69 @@ export function renderTimeSlots() {
   if (!dateInput.value) dateInput.value = state.widget.date;
   state.widget.date = dateInput.value;
 
+  const master = state.db.masters.find(m => m.id === state.widget.masterId);
   const selectedObjs = state.db.services.filter(s => state.widget.serviceIds.includes(s.id));
-  const neededDuration = selectedObjs.reduce((acc, s) => acc + Number(s.duration), 0) || 60;
-  const startMin = (Number(state.db.salon.workStart) || 9) * 60;
-  const endMin = (Number(state.db.salon.workEnd) || 20) * 60;
-
-  const busy = state.db.appointments.filter(a =>
-    a.masterId === state.widget.masterId &&
-    a.date === state.widget.date &&
-    a.status !== 'cancelled'
-  );
-
-  const slots = [];
-  for (let m = startMin; m + neededDuration <= endMin; m += 30) {
-    const slotStart = m;
-    const slotEnd = m + neededDuration;
-    const hasConflict = busy.some(b => {
-      const bStart = timeToMin(b.time);
-      const bEnd = bStart + Number(b.duration || 60);
-      return slotStart < bEnd && slotEnd > bStart;
-    });
-    if (!hasConflict) slots.push(minToTime(m));
-  }
 
   const container = $('widget-time-slots');
-  if (!container) return;
+  if (!container || !master) return;
 
-  if (slots.length === 0) {
-    container.innerHTML = `<div class="col-span-3 text-center py-6 text-xs text-slate-400">На обрану дату немає вільних вікон достатньої тривалості</div>`;
+  // Розрахунок за трирівневою системою розкладу (DateOverrides > WeeklySchedule > Bookings/TimeBlocks)
+  const calc = calculateAvailableSlots(master, selectedObjs, state.widget.date, state.db);
+
+  const summaryEl = $('step3-summary');
+  if (summaryEl) {
+    if (calc.isWorking) {
+      summaryEl.textContent = `Робочий день: ${calc.daySched.workStart}–${calc.daySched.workEnd} • Зайнятість: ${calc.totalDuration} хв (+ ${calc.buffer} хв буфер)`;
+    } else {
+      summaryEl.textContent = `⚠️ ${calc.reason || 'Вихідний день'}`;
+    }
+  }
+
+  // Якщо майстер вихідний або немає слотів — показуємо підказку найближчих вільних днів
+  if (!calc.isWorking || calc.slots.length === 0) {
+    const nextDays = findNextAvailableDays(master, selectedObjs, state.widget.date, state.db, 3);
+    
+    let nextDaysHtml = '';
+    if (nextDays.length > 0) {
+      nextDaysHtml = `
+        <div class="mt-4 pt-3 border-t border-slate-200">
+          <div class="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">Найближчі доступні дні:</div>
+          <div class="flex flex-wrap gap-2">
+            ${nextDays.map(d => `
+              <button type="button" data-pick-suggested-date="${d.date}" class="px-3 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold border border-indigo-200 transition flex items-center gap-1.5">
+                <span>📅 ${d.formatted}</span>
+                <span class="text-[10px] bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded-md">${d.slotsCount} слотів</span>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    container.innerHTML = `
+      <div class="col-span-3 text-center py-6 px-4 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+        <div class="text-2xl mb-1">${calc.isWorking ? '⏳' : '🏖️'}</div>
+        <div class="text-xs font-semibold text-slate-700">
+          ${calc.isWorking ? 'На обрану дату всі вільні вікна зайняті' : (calc.reason || 'Майстер не працює на обрану дату')}
+        </div>
+        <div class="text-[11px] text-slate-400 mt-0.5">Оберіть іншу дату для запису</div>
+        ${nextDaysHtml}
+      </div>
+    `;
+
+    container.querySelectorAll('[data-pick-suggested-date]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.widget.date = btn.dataset.pickSuggestedDate;
+        dateInput.value = state.widget.date;
+        renderTimeSlots();
+      });
+    });
     return;
   }
 
-  container.innerHTML = slots.map(t => `
-    <button data-time="${t}" class="py-2.5 rounded-xl border text-xs font-semibold transition ${state.widget.time === t ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-200 hover:border-indigo-400 text-slate-700'}">
+  // Рендер кнопок слотів
+  container.innerHTML = calc.slots.map(t => `
+    <button type="button" data-time="${t}" class="py-2.5 rounded-xl border text-xs font-semibold transition ${state.widget.time === t ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'border-slate-200 hover:border-indigo-400 text-slate-700 bg-white'}">
       ${t}
     </button>
   `).join('');
@@ -218,6 +247,9 @@ export async function submitClientBooking() {
   const totalDur = selectedObjs.reduce((acc, s) => acc + Number(s.duration), 0);
   const totalPrice = selectedObjs.reduce((acc, s) => acc + Number(s.price), 0);
 
+  const maxServiceBuffer = selectedObjs.reduce((acc, s) => Math.max(acc, Number(s.bufferTime !== undefined ? s.bufferTime : 0)), 0);
+  const buffer = maxServiceBuffer > 0 ? maxServiceBuffer : (Number(master.globalBuffer) || 15);
+
   const newBooking = {
     id: 'a' + Date.now(),
     masterId: state.widget.masterId,
@@ -225,6 +257,7 @@ export async function submitClientBooking() {
     date: state.widget.date,
     time: state.widget.time,
     duration: totalDur,
+    bufferTime: buffer,
     price: totalPrice,
     clientName: name,
     clientPhone: phone,
@@ -232,19 +265,23 @@ export async function submitClientBooking() {
     notes: comment
   };
 
+  lastCreatedBooking = newBooking;
   state.db.appointments.push(newBooking);
 
   const tgMessage = `🔔 <b>Новий онлайн-запис!</b>
 Майстер: <b>${master.name}</b>
 Послуги: ${selectedObjs.map(s => s.title).join(', ')}
-Дата: <b>${newBooking.date} о ${newBooking.time}</b>
+Дата: <b>${newBooking.date} о ${newBooking.time}</b> (тривалість: ${totalDur} хв + ${buffer} хв буфер)
 Клієнт: ${name} (${phone})
-Сума: ${totalPrice} ₴`;
+Сума: ${totalPrice} ₴
+${comment ? 'Коментар: ' + comment : ''}`;
 
   await saveDatabase({ chatId: master.tgChatId || state.db.salon.tgChatId, message: tgMessage });
 
   const successEl = $('success-details');
-  if (successEl) successEl.textContent = `${master.name} чекає на вас ${newBooking.date} о ${newBooking.time}. Вартість: ${totalPrice} ₴.`;
+  if (successEl) {
+    successEl.textContent = `${master.name} чекає на вас ${newBooking.date} о ${newBooking.time}. Вартість: ${totalPrice} ₴.`;
+  }
 
   goToStep(5);
 }
@@ -252,6 +289,7 @@ export async function submitClientBooking() {
 // =================== СКИДАННЯ ВІДЖЕТА ===================
 
 export function resetWidget() {
+  lastCreatedBooking = null;
   state.widget = {
     step: 1,
     masterId: null,
@@ -270,34 +308,78 @@ export function resetWidget() {
   renderWidgetMasters();
 }
 
+// =================== ЕКСПОРТ В КАЛЕНДАР (КРОК 5) ===================
+
+function addSuccessCalendarButtons() {
+  const container = $('widget-step-5');
+  if (!container) return;
+
+  const existing = $('success-calendar-actions');
+  if (existing) existing.remove();
+
+  const actionsDiv = document.createElement('div');
+  actionsDiv.id = 'success-calendar-actions';
+  actionsDiv.className = 'flex flex-col gap-2 pt-3 max-w-xs mx-auto';
+  actionsDiv.innerHTML = `
+    <button type="button" id="btn-success-google" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition shadow-sm">
+      <span>📅</span>
+      <span>Додати в Google Calendar</span>
+    </button>
+    <button type="button" id="btn-success-ics" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition">
+      <span>📥</span>
+      <span>Завантажити .ics (Apple / Outlook)</span>
+    </button>
+  `;
+
+  // Вставити перед кнопкою скидання
+  const resetBtn = container.querySelector('[data-action="reset-widget"]');
+  if (resetBtn && resetBtn.parentElement) {
+    resetBtn.parentElement.insertBefore(actionsDiv, resetBtn);
+  } else {
+    container.appendChild(actionsDiv);
+  }
+
+  $('btn-success-google')?.addEventListener('click', () => {
+    if (!lastCreatedBooking) return;
+    const master = state.db.masters.find(m => m.id === lastCreatedBooking.masterId);
+    const services = state.db.services.filter(s => lastCreatedBooking.serviceIds && lastCreatedBooking.serviceIds.includes(s.id));
+    const url = generateGoogleCalendarUrl(lastCreatedBooking, master, services, state.db.salon);
+    window.open(url, '_blank');
+  });
+
+  $('btn-success-ics')?.addEventListener('click', () => {
+    if (!lastCreatedBooking) return;
+    const master = state.db.masters.find(m => m.id === lastCreatedBooking.masterId);
+    const services = state.db.services.filter(s => lastCreatedBooking.serviceIds && lastCreatedBooking.serviceIds.includes(s.id));
+    downloadIcsFile(lastCreatedBooking, master, services, state.db.salon);
+  });
+}
+
 // =================== ІНІЦІАЛІЗАЦІЯ ===================
 
 export function initBooking() {
-  // Дата
   const datePicker = $('widget-date-picker');
   if (datePicker) {
     datePicker.value = todayStr;
     datePicker.addEventListener('change', renderTimeSlots);
   }
 
-  // Кнопка «Обрати дату та час»
   const btnToStep3 = document.querySelector('[data-action="to-step-3"]');
   if (btnToStep3) btnToStep3.addEventListener('click', () => goToStep(3));
 
-  // Кнопки навігації кроків
   document.querySelectorAll('[data-step-nav]').forEach(btn => {
     btn.addEventListener('click', () => goToStep(Number(btn.dataset.stepNav)));
   });
 
-  // Кнопка підтвердження
   const btnSubmit = document.querySelector('[data-action="submit-booking"]');
   if (btnSubmit) btnSubmit.addEventListener('click', submitClientBooking);
 
-  // Кнопка ще один запис
   const btnReset = document.querySelector('[data-action="reset-widget"]');
   if (btnReset) btnReset.addEventListener('click', resetWidget);
 
-  // Підписка на оновлення
+  // Додаємо календарні кнопки на 5 кроці
+  addSuccessCalendarButtons();
+
   state.subscribe(() => {
     const salonNameEl = $('widget-salon-name');
     if (salonNameEl) salonNameEl.textContent = state.db.salon.name;

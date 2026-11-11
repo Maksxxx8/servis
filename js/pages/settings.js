@@ -51,7 +51,7 @@ export function renderSettingsForm() {
           <div>
             <span class="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700">${m ? m.name : ''}</span>
             <span class="font-semibold text-slate-800 ml-1">${s.title}</span>
-            <span class="text-xs text-slate-400 ml-2">${s.duration} хв • ${s.price} ₴</span>
+            <span class="text-xs text-slate-400 ml-2">${s.duration} хв (+${s.bufferTime !== undefined ? s.bufferTime : 15} хв буфер) • ${s.price} ₴</span>
           </div>
           <div class="flex items-center gap-2">
             <button data-edit-service="${s.id}" class="text-xs px-2.5 py-1 rounded-lg border hover:bg-slate-50">✎ Змінити</button>

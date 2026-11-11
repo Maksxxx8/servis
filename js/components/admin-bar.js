@@ -1,8 +1,12 @@
 /**
  * components/admin-bar.js — Верхня панель адміністратора
  *
- * Управляє вкладками (Віджет / Шахівниця / Налаштування / Клієнти)
- * та відображенням статусу сервера.
+ * Управляє вкладками:
+ * - Віджет клієнта (client)
+ * - Шахівниця розкладу (calendar)
+ * - Мій графік та буфери (schedule)
+ * - Налаштування та Послуги (settings)
+ * - Клієнти (clients)
  */
 
 import state from '../state.js';
@@ -12,11 +16,11 @@ import { $, show, hide } from '../utils/dom.js';
 let currentView = 'client';
 
 /**
- * Перемкнути вид (client | calendar | settings | clients)
+ * Перемкнути вид (client | calendar | schedule | settings | clients)
  */
 export function switchView(view) {
   currentView = view;
-  ['client', 'calendar', 'settings', 'clients'].forEach(v => {
+  ['client', 'calendar', 'schedule', 'settings', 'clients'].forEach(v => {
     const viewEl = $(`view-${v}`);
     if (viewEl) viewEl.classList.toggle('hidden', v !== view);
 
@@ -75,6 +79,7 @@ export function initAdminBar() {
   const tabs = {
     'tab-client': 'client',
     'tab-calendar': 'calendar',
+    'tab-schedule': 'schedule',
     'tab-settings': 'settings',
     'tab-clients': 'clients'
   };
@@ -84,6 +89,5 @@ export function initAdminBar() {
     if (btn) btn.addEventListener('click', () => switchView(view));
   });
 
-  // Підписатися на оновлення стану — оновлювати бейдж сервера
   state.subscribe(() => updateServerBadge());
 }
