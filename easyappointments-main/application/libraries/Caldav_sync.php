@@ -1,0 +1,1077 @@
+<?php defined('BASEPATH') or exit('No direct script access allowed');
+
+/* ----------------------------------------------------------------------------
+ * Easy!Appointments - Online Appointment Scheduler
+ *
+ * @package     EasyAppointments
+ * @author      A.Tselegidis <alextselegidis@gmail.com>
+ * @copyright   Copyright (c) Alex Tselegidis
+ * @license     https://opensource.org/licenses/GPL-3.0 - GPLv3
+ * @link        https://easyappointments.org
+ * @since       v1.5.0
+ * ---------------------------------------------------------------------------- */
+
+use GuzzleHttp\Client;
+use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Uri;
+use Jsvrcek\ICS\Exception\CalendarEventException;
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\UriInterface;
+use Sabre\VObject\Component\VEvent;
+use Sabre\VObject\Reader;
+
+/**
+ * Caldav sync library.
+ *
+ * Handles CalDAV related operations using Guzzle.
+ *
+ * @package Libraries
+ */
+class Caldav_sync
+{
+    /**
+     * Host that the administrator confirmed for the current request, before it is stored.
+     */
+    private ?string $pending_allowed_host = null;
+
+    /**
+     * @var EA_Controller|CI_Controller
+     */
+    protected EA_Controller|CI_Controller $CI;
+
+    /**
+     * Caldav_sync constructor.
+     *
+     * This method initializes the Caldav client class and the Calendar service class so that they can be used by the
+     * other methods.
+     *
+     * @throws Exception If there is an issue with the initialization.
+     */
+    public function __construct()
+    {
+        $this->CI = &get_instance();
+
+        $this->CI->load->model('appointments_model');
+        $this->CI->load->model('customers_model');
+        $this->CI->load->model('providers_model');
+        $this->CI->load->model('services_model');
+
+        $this->CI->load->library('ics_file');
+    }
+
+    /**
+     * Add an appointment record to the connected CalDAV calendar.
+     *
+     * @param array $appointment Appointment record.
+     * @param array $service Service record.
+     * @param array $provider Provider record.
+     * @param array $customer Customer record.
+     *
+     * @return string|null Returns the event ID
+     *
+     * @throws CalendarEventException If there's an issue generating the ICS file.
+     */
+    public function save_appointment(array $appointment, array $service, array $provider, array $customer): ?string
+    {
+        try {
+            $ics_file = $this->get_appointment_ics_file($appointment, $service, $provider, $customer);
+
+            $client = $this->get_http_client_by_provider_id($provider['id']);
+
+            $caldav_event_id =
+                $appointment['id_caldav_calendar'] ?: $this->CI->ics_file->generate_uid($appointment['id']);
+
+            // An event that is already synced may live under a URI that does not match its UID, so look the
+            // existing resource up instead of writing a second event next to it.
+            $uri = $appointment['id_caldav_calendar']
+                ? $this->get_existing_event_uri($client, $provider['settings']['caldav_url'], $caldav_event_id)
+                : $this->get_caldav_event_uri($provider['settings']['caldav_url'], $caldav_event_id);
+
+            $client->request('PUT', $uri, [
+                'headers' => [
+                    'Content-Type' => 'text/calendar',
+                ],
+                'body' => $ics_file,
+            ]);
+
+            return $caldav_event_id;
+        } catch (GuzzleException $e) {
+            $this->handle_guzzle_exception($e, 'Failed to save CalDAV appointment event');
+
+            // Propagate so the controller can report the failure to the user.
+            throw $e;
+        }
+    }
+
+    /**
+     * Add an unavailability record to the connected CalDAV calendar.
+     *
+     * @param array $unavailability Appointment record.
+     * @param array $provider Provider record.
+     *
+     * @return string|null Returns the event ID
+     *
+     * @throws CalendarEventException If there's an issue generating the ICS file.
+     */
+    public function save_unavailability(array $unavailability, array $provider): ?string
+    {
+        try {
+            if (str_contains((string) $unavailability['id_caldav_calendar'], 'RECURRENCE')) {
+                return $unavailability['id_caldav_calendar'] ?? null; // Do not sync recurring unavailabilities
+            }
+
+            $ics_file = $this->get_unavailability_ics_file($unavailability, $provider);
+
+            $client = $this->get_http_client_by_provider_id($provider['id']);
+
+            $caldav_event_id =
+                $unavailability['id_caldav_calendar'] ?: $this->CI->ics_file->generate_uid($unavailability['id']);
+
+            // An event that is already synced may live under a URI that does not match its UID, so look the
+            // existing resource up instead of writing a second event next to it.
+            $uri = $unavailability['id_caldav_calendar']
+                ? $this->get_existing_event_uri($client, $provider['settings']['caldav_url'], $caldav_event_id)
+                : $this->get_caldav_event_uri($provider['settings']['caldav_url'], $caldav_event_id);
+
+            $client->request('PUT', $uri, [
+                'headers' => [
+                    'Content-Type' => 'text/calendar',
+                ],
+                'body' => $ics_file,
+            ]);
+
+            return $caldav_event_id;
+        } catch (GuzzleException $e) {
+            $this->handle_guzzle_exception($e, 'Failed to save CalDAV unavailability event');
+
+            // Propagate so the controller can report the failure to the user.
+            throw $e;
+        }
+    }
+
+    /**
+     * Delete an existing appointment from Caldav Calendar.
+     *
+     * @param array $provider Provider data.
+     * @param string $caldav_event_id The Caldav Calendar event ID to be removed.
+     */
+    public function delete_event(array $provider, string $caldav_event_id): void
+    {
+        try {
+            $client = $this->get_http_client_by_provider_id($provider['id']);
+
+            $uri = $this->get_caldav_event_uri($provider['settings']['caldav_url'], $caldav_event_id);
+
+            try {
+                $client->request('DELETE', $uri);
+            } catch (RequestException $e) {
+                if (!$e->hasResponse() || $e->getResponse()->getStatusCode() !== 404) {
+                    throw $e;
+                }
+
+                // An imported event may be stored under a URI that does not match its UID.
+                $existing_uri = $this->find_event_uri($client, $caldav_event_id);
+
+                if (!$existing_uri || $existing_uri === $uri) {
+                    throw $e;
+                }
+
+                $client->request('DELETE', $existing_uri);
+            }
+        } catch (GuzzleException $e) {
+            $this->handle_guzzle_exception($e, 'Failed to delete CalDAV event');
+        }
+    }
+
+    /**
+     * Get a Caldav Calendar event.
+     *
+     * @param array $provider Provider Data.
+     * @param string $caldav_event_id CalDAV calendar event ID.
+     *
+     * @return array|null
+     * @throws Exception If there’s an issue parsing the ICS data.
+     */
+    public function get_event(array $provider, string $caldav_event_id): ?array
+    {
+        try {
+            $client = $this->get_http_client_by_provider_id($provider['id']);
+
+            $provider_timezone_object = new DateTimeZone($provider['timezone']);
+
+            $uri = $this->get_caldav_event_uri($provider['settings']['caldav_url'], $caldav_event_id);
+
+            try {
+                $response = $client->request('GET', $uri);
+            } catch (RequestException $e) {
+                if (!$e->hasResponse() || $e->getResponse()->getStatusCode() !== 404) {
+                    throw $e;
+                }
+
+                // An imported event may be stored under a URI that does not match its UID, so look it up before the
+                // event is reported as missing and the local record gets removed.
+                $existing_uri = $this->find_event_uri($client, $caldav_event_id);
+
+                if (!$existing_uri || $existing_uri === $uri) {
+                    throw $e;
+                }
+
+                $response = $client->request('GET', $existing_uri);
+            }
+
+            $ics_file = $response->getBody()->getContents();
+
+            $vcalendar = Reader::read($ics_file);
+
+            return $this->convert_caldav_event_to_array_event($vcalendar->VEVENT, $provider_timezone_object);
+        } catch (GuzzleException $e) {
+            $this->handle_guzzle_exception($e, 'Failed to get CalDAV event');
+
+            // Only swallow 404 ("event not found") — every other error (e.g. 401
+            // invalid credentials, 5xx server failure) must propagate so the caller
+            // can surface it to the user instead of silently treating the event as
+            // missing and deleting the local copy.
+            if ($e instanceof RequestException && $e->hasResponse() && $e->getResponse()->getStatusCode() === 404) {
+                return null;
+            }
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Get all the events between the sync period.
+     *
+     * @param array $provider Provider data.
+     * @param string $start_date_time The start date of sync period.
+     * @param string $end_date_time The end date of sync period.
+     *
+     * @return array
+     * @throws Exception If there's an issue with event fetching or parsing.
+     */
+    public function get_sync_events(array $provider, string $start_date_time, string $end_date_time): array
+    {
+        try {
+            $client = $this->get_http_client_by_provider_id($provider['id']);
+            $provider_timezone_object = new DateTimeZone($provider['timezone']);
+
+            $response = $this->fetch_events($client, $start_date_time, $end_date_time, $provider_timezone_object);
+
+            if (!$response->getBody()) {
+                log_message('error', 'No response body from fetch_events' . PHP_EOL);
+                return [];
+            }
+
+            $xml = new SimpleXMLElement($response->getBody(), 0, false, 'd', true);
+
+            // Check for both prefixed namespace (xmlns:d="DAV:") and default namespace (xmlns="DAV:")
+            // Prefixed namespace: children('d', true) returns elements
+            // Default namespace: children() without params returns elements
+
+            if (count($xml->children('d', true)) > 0) {
+                return $this->parse_xml_events($xml, $start_date_time, $end_date_time, $provider_timezone_object, 'd');
+            } elseif (count($xml->children('D', true)) > 0) {
+                return $this->parse_xml_events($xml, $start_date_time, $end_date_time, $provider_timezone_object, 'D');
+            } elseif (count($xml->children()) > 0) {
+                // Default namespace - pass null to use children() without namespace parameter
+                return $this->parse_xml_events($xml, $start_date_time, $end_date_time, $provider_timezone_object, null);
+            }
+
+            $ics_file_urls = $this->extract_ics_file_urls($response->getBody());
+            return $this->fetch_and_parse_ics_files(
+                $client,
+                $ics_file_urls,
+                $start_date_time,
+                $end_date_time,
+                $provider_timezone_object,
+            );
+        } catch (GuzzleException $e) {
+            $this->handle_guzzle_exception($e, 'Failed to get CalDAV sync events');
+
+            // Only swallow 404 ("calendar not found") — auth and other errors must
+            // propagate so the caller can surface them to the user.
+            if ($e instanceof RequestException && $e->hasResponse() && $e->getResponse()->getStatusCode() === 404) {
+                return [];
+            }
+
+            throw $e;
+        }
+    }
+
+    private function parse_xml_events(
+        SimpleXMLElement $xml,
+        string $start_date_time,
+        string $end_date_time,
+        DateTimeZone $timezone,
+        ?string $xml_namespace = 'd',
+    ): array {
+        $events = [];
+
+        // Handle both prefixed (xmlns:d="DAV:") and default (xmlns="DAV:") namespaces
+        $responses = $xml_namespace ? $xml->children($xml_namespace, true) : $xml->children();
+
+        foreach ($responses as $response) {
+            // Use the CalDAV namespace URI to find calendar-data elements regardless of
+            // which prefix the server chose (e.g. 'cal', 'C', 'c', or any other valid prefix).
+            $prop = $response->propstat->prop;
+
+            $ics_contents = '';
+
+            $caldav_children = $prop->children('urn:ietf:params:xml:ns:caldav');
+
+            foreach ($caldav_children as $child) {
+                if ($child->getName() === 'calendar-data') {
+                    $ics_contents = (string) $child;
+                    break;
+                }
+            }
+
+            if ($ics_contents) {
+                $events = array_merge(
+                    $events,
+                    $this->expand_ics_content($ics_contents, $start_date_time, $end_date_time, $timezone),
+                );
+            }
+        }
+
+        return $events;
+    }
+
+    private function extract_ics_file_urls(string $body): array
+    {
+        $ics_files = [];
+        $lines = explode("\n", $body);
+        foreach ($lines as $line) {
+            if (preg_match('/\/calendars\/.*?\.ics/', $line, $matches)) {
+                $ics_files[] = $matches[0];
+            }
+        }
+        return $ics_files;
+    }
+
+    /**
+     * Fetch and parse the ICS files from the remote server
+     *
+     * @param Client $client
+     * @param array $ics_file_urls
+     * @param string $start_date_time
+     * @param string $end_date_time
+     * @param DateTimeZone $timezone_OBJECT
+     *
+     * @return array
+     */
+    private function fetch_and_parse_ics_files(
+        Client $client,
+        array $ics_file_urls,
+        string $start_date_time,
+        string $end_date_time,
+        DateTimeZone $timezone_OBJECT,
+    ): array {
+        $events = [];
+
+        foreach ($ics_file_urls as $ics_file_url) {
+            try {
+                $ics_response = $client->request('GET', $ics_file_url);
+
+                $ics_contents = $ics_response->getBody()->getContents();
+
+                if (empty($ics_contents)) {
+                    log_message('error', 'ICS file data is empty for URL: ' . $ics_file_url . PHP_EOL);
+                    continue;
+                }
+
+                $events = array_merge(
+                    $events,
+                    $this->expand_ics_content($ics_contents, $start_date_time, $end_date_time, $timezone_OBJECT),
+                );
+            } catch (GuzzleException $e) {
+                log_message(
+                    'error',
+                    'Failed to fetch ICS content from ' . $ics_file_url . ': ' . $e->getMessage() . PHP_EOL,
+                );
+            }
+        }
+
+        return $events;
+    }
+
+    private function expand_ics_content(
+        string $ics_contents,
+        string $start_date_time,
+        string $end_date_time,
+        DateTimeZone $timezone_object,
+    ): array {
+        $events = [];
+
+        try {
+            $vcalendar = Reader::read($ics_contents);
+
+            $expanded_vcalendar = $vcalendar->expand(new DateTime($start_date_time), new DateTime($end_date_time));
+
+            foreach ($expanded_vcalendar->VEVENT as $event) {
+                $events[] = $this->convert_caldav_event_to_array_event($event, $timezone_object);
+            }
+        } catch (Throwable $e) {
+            log_message('error', 'Failed to parse or expand calendar data: ' . $e->getMessage() . PHP_EOL);
+        }
+
+        return $events;
+    }
+
+    /**
+     * Common error handling for the CalDAV requests.
+     *
+     * @param GuzzleException $e
+     * @param string $message
+     *
+     * @return void
+     */
+    private function handle_guzzle_exception(GuzzleException $e, string $message): void
+    {
+        // Guzzle throws a RequestException for HTTP errors
+
+        if ($e instanceof RequestException && $e->hasResponse()) {
+            // Handle HTTP error response
+
+            $response = $e->getResponse();
+
+            $status_code = $response->getStatusCode();
+
+            $guzzle_info = '(Status Code: ' . $status_code . '): ' . $response->getBody()->getContents() . PHP_EOL;
+        } else {
+            // Handle other request errors
+
+            $guzzle_info = $e->getMessage();
+        }
+
+        log_message('error', $message . ' ' . $guzzle_info);
+    }
+
+    /**
+     * @throws Exception If there is an invalid CalDAV URL or credentials.
+     * @throws GuzzleException If there’s an issue with the HTTP request.
+     */
+    private function get_http_client(string $caldav_url, string $caldav_username, string $caldav_password): Client
+    {
+        $pinned_ip = $this->assert_safe_caldav_url($caldav_url);
+
+        if (!$caldav_username) {
+            throw new InvalidArgumentException('Missing CalDAV username');
+        }
+
+        if (!$caldav_password) {
+            throw new InvalidArgumentException('Missing CalDAV password');
+        }
+
+        $base_uri = new Uri(rtrim($caldav_url, '/') . '/');
+
+        $handler_stack = HandlerStack::create();
+
+        // Pushed last, this runs after the redirect middleware, so it also sees the requests that a redirect or an
+        // absolute href in a server response leads to. Neither may leave the server that was checked above.
+        $handler_stack->push(
+            Middleware::mapRequest(function (RequestInterface $request) use ($base_uri) {
+                if (!$this->is_same_origin($request->getUri(), $base_uri)) {
+                    throw new RequestException(
+                        'CalDAV request to another server is not allowed: ' . $request->getUri(),
+                        $request,
+                    );
+                }
+
+                return $request;
+            }),
+        );
+
+        $options = [
+            'base_uri' => $base_uri,
+            'connect_timeout' => 15,
+            'headers' => [
+                'Content-Type' => 'text/xml',
+            ],
+            'auth' => [$caldav_username, $caldav_password],
+            'handler' => $handler_stack,
+        ];
+
+        // Connect to the address that was checked, instead of letting cURL resolve the host again, as a second lookup
+        // may return a private address (DNS rebinding).
+        if ($pinned_ip) {
+            $port = $base_uri->getPort() ?? ($base_uri->getScheme() === 'https' ? 443 : 80);
+
+            $address = str_contains($pinned_ip, ':') ? '[' . $pinned_ip . ']' : $pinned_ip;
+
+            $options['curl'] = [CURLOPT_RESOLVE => [$base_uri->getHost() . ':' . $port . ':' . $address]];
+        }
+
+        return new Client($options);
+    }
+
+    /**
+     * Check whether both URIs point to the same scheme, host and port.
+     */
+    private function is_same_origin(UriInterface $uri, UriInterface $base_uri): bool
+    {
+        return strtolower($uri->getScheme()) === strtolower($base_uri->getScheme()) &&
+            strtolower($uri->getHost()) === strtolower($base_uri->getHost()) &&
+            $uri->getPort() === $base_uri->getPort();
+    }
+
+    /**
+     * Ensure CalDAV URLs are valid and point to public network destinations.
+     *
+     * @return string|null The checked address to connect to, or NULL when the host needs no resolving (an IP address
+     * or a host allowed by the administrator).
+     */
+    private function assert_safe_caldav_url(string $caldav_url): ?string
+    {
+        if (!filter_var($caldav_url, FILTER_VALIDATE_URL)) {
+            throw new InvalidArgumentException('Invalid CalDAV URL provided.');
+        }
+
+        $scheme = strtolower((string) parse_url($caldav_url, PHP_URL_SCHEME));
+        $host = trim((string) parse_url($caldav_url, PHP_URL_HOST), '[]');
+
+        if (!in_array($scheme, ['http', 'https'], true) || empty($host)) {
+            throw new InvalidArgumentException('Invalid CalDAV URL provided.');
+        }
+
+        // Hosts that an administrator allowed in the CalDAV integration settings are trusted as they are, so that
+        // installations with a CalDAV server on the local network can still reach it.
+        if (in_array(strtolower($host), $this->get_allowed_hosts(), true)) {
+            return null;
+        }
+
+        $resolved_ips = $this->resolve_host_ips($host);
+
+        // Name the host in both messages: it is the value the administrator has to add to the allowed connection
+        // URLs, and the calendar page shows the message as it is.
+        if (empty($resolved_ips)) {
+            throw new InvalidArgumentException('CalDAV URL host cannot be resolved: ' . $host);
+        }
+
+        foreach ($resolved_ips as $resolved_ip) {
+            if (!$this->is_public_ip($resolved_ip)) {
+                throw new InvalidArgumentException('CalDAV URL host is not allowed: ' . $host);
+            }
+        }
+
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            return null;
+        }
+
+        // Prefer IPv4, as servers without IPv6 connectivity would otherwise fail to connect to hosts that have both.
+        $ipv4_ips = array_filter($resolved_ips, fn($ip) => filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4));
+
+        return reset($ipv4_ips) ?: $resolved_ips[0];
+    }
+
+    /**
+     * Check whether the IP address belongs to the public network.
+     */
+    private function is_public_ip(string $ip): bool
+    {
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return false;
+        }
+
+        $binary = inet_pton($ip);
+
+        if (strlen($binary) === 4) {
+            // Shared address space (100.64.0.0/10), used by carrier-grade NAT and some cloud metadata services.
+            return !(ord($binary[0]) === 100 && (ord($binary[1]) & 0xc0) === 64);
+        }
+
+        // Check the IPv4 address that these IPv6 addresses carry: IPv4-compatible (::/96), IPv4-mapped
+        // (::ffff:0:0/96), NAT64 (64:ff9b::/96) and 6to4 (2002::/16). The PHP filter does not look into all of them.
+        $embedded_ipv4 = match (true) {
+            str_starts_with($binary, str_repeat("\0", 12)),
+            str_starts_with($binary, str_repeat("\0", 10) . "\xff\xff"),
+            str_starts_with($binary, "\x00\x64\xff\x9b" . str_repeat("\0", 8))
+                => substr($binary, 12, 4),
+            str_starts_with($binary, "\x20\x02") => substr($binary, 2, 4),
+            default => null,
+        };
+
+        if ($embedded_ipv4 !== null) {
+            return $this->is_public_ip(inet_ntop($embedded_ipv4));
+        }
+
+        // Local-use NAT64 (64:ff9b:1::/48), Teredo (2001::/32), documentation (2001:db8::/32) and discard (100::/64)
+        // addresses either tunnel into other networks or are never public.
+        foreach (
+            ["\x00\x64\xff\x9b\x00\x01", "\x20\x01\x00\x00", "\x20\x01\x0d\xb8", "\x01\x00" . str_repeat("\0", 6)]
+            as $prefix
+        ) {
+            if (str_starts_with($binary, $prefix)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Get the host of the provided CalDAV URL when it may not be reached as things stand.
+     *
+     * Returns NULL when the URL is fine, so that the caller can offer to allow the host instead of only reporting a
+     * failure.
+     */
+    public function get_blocked_host(string $caldav_url): ?string
+    {
+        try {
+            $this->assert_safe_caldav_url($caldav_url);
+        } catch (InvalidArgumentException) {
+            return strtolower(trim((string) parse_url($caldav_url, PHP_URL_HOST), '[]')) ?: null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Add the host of the provided CalDAV URL to the allowed connection URLs.
+     *
+     * Only call this once the administrator has confirmed the host, as it lifts the private address check for it.
+     */
+    public function allow_host(string $caldav_url): void
+    {
+        $host = strtolower(trim((string) parse_url($caldav_url, PHP_URL_HOST), '[]'));
+
+        if (!$host || in_array($host, $this->get_allowed_hosts(), true)) {
+            return;
+        }
+
+        // Only allow the host for the request at hand, so that a connection attempt that turns out to be wrong does
+        // not leave it permanently allowed. Call persist_allowed_host() once the connection actually worked.
+        $this->pending_allowed_host = $host;
+    }
+
+    /**
+     * Store the host that allow_host() confirmed for the current request.
+     *
+     * Only call this after the connection test succeeded, otherwise a failed attempt would widen the allowed
+     * connection URLs for good.
+     */
+    public function persist_allowed_host(): void
+    {
+        if (!$this->pending_allowed_host) {
+            return;
+        }
+
+        $allowed_hosts = trim((string) setting('caldav_allowed_hosts', ''));
+
+        setting([
+            'caldav_allowed_hosts' =>
+                $allowed_hosts === ''
+                    ? $this->pending_allowed_host
+                    : $allowed_hosts . "\n" . $this->pending_allowed_host,
+        ]);
+
+        $this->pending_allowed_host = null;
+    }
+
+    /**
+     * Get the hosts that are allowed to resolve to a private or reserved address.
+     *
+     * Administrators maintain the list in the CalDAV integration settings, where every line holds either a full
+     * connection URL or a bare host name.
+     */
+    private function get_allowed_hosts(): array
+    {
+        $allowed_hosts = [];
+
+        foreach (preg_split('/[\s,]+/', (string) setting('caldav_allowed_hosts', '')) as $entry) {
+            if ($entry === '') {
+                continue;
+            }
+
+            $host = parse_url($entry, PHP_URL_HOST) ?: $entry;
+
+            $allowed_hosts[] = strtolower(trim((string) $host, '[]'));
+        }
+
+        if ($this->pending_allowed_host) {
+            $allowed_hosts[] = $this->pending_allowed_host;
+        }
+
+        return $allowed_hosts;
+    }
+
+    /**
+     * Resolve all reachable IPv4/IPv6 addresses for the provided host.
+     */
+    private function resolve_host_ips(string $host): array
+    {
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            return [$host];
+        }
+
+        $resolved_ips = [];
+
+        $dns_records = dns_get_record($host, DNS_A + DNS_AAAA);
+
+        if ($dns_records !== false) {
+            foreach ($dns_records as $dns_record) {
+                if (!empty($dns_record['ip'])) {
+                    $resolved_ips[] = $dns_record['ip'];
+                }
+
+                if (!empty($dns_record['ipv6'])) {
+                    $resolved_ips[] = $dns_record['ipv6'];
+                }
+            }
+        }
+
+        if (empty($resolved_ips)) {
+            $ipv4_hosts = gethostbynamel($host);
+
+            if (is_array($ipv4_hosts)) {
+                $resolved_ips = array_merge($resolved_ips, $ipv4_hosts);
+            }
+        }
+
+        return array_values(array_unique($resolved_ips));
+    }
+
+    /**
+     * @throws Exception
+     * @throws GuzzleException
+     */
+    public function test_connection(string $caldav_url, string $caldav_username, string $caldav_password): void
+    {
+        try {
+            $client = $this->get_http_client($caldav_url, $caldav_username, $caldav_password);
+
+            // A PROPFIND on the provided URL is the only request that always requires the read
+            // privilege on that exact resource, which makes it the reliable credential check.
+            // Calendar queries (REPORT) are answered with an empty multistatus by some servers
+            // (e.g. SabreDAV/Baikal) when the URL points to a parent collection, even if the
+            // credentials are wrong - the authentication error would then only surface later,
+            // during the synchronization.
+            $this->assert_caldav_calendar_collection($client);
+
+            // Fetch some events to see if the calendar queries work as expected as well.
+            $start_date_time = date('Y-m-d 00:00:00');
+            $end_date_time = date('Y-m-d 23:59:59');
+
+            $server_timezone_object = new DateTimeZone(date_default_timezone_get());
+
+            $this->fetch_events($client, $start_date_time, $end_date_time, $server_timezone_object);
+        } catch (GuzzleException $e) {
+            $this->handle_guzzle_exception($e, 'Failed to test CalDAV connection');
+            throw $e;
+        }
+    }
+
+    /**
+     * Make sure the client base URL points to a CalDAV calendar collection.
+     *
+     * @throws GuzzleException If there's an issue with the HTTP request (401 for invalid credentials).
+     * @throws InvalidArgumentException If the URL is not a calendar collection.
+     */
+    private function assert_caldav_calendar_collection(Client $client): void
+    {
+        $response = $client->request('PROPFIND', '', [
+            'headers' => [
+                'Content-Type' => 'application/xml',
+                'Depth' => '0',
+            ],
+            'body' => '<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype /></d:prop></d:propfind>',
+        ]);
+
+        $body = (string) $response->getBody();
+
+        // Match the CalDAV namespace URI instead of a prefix, as servers are free to pick any.
+        $is_calendar =
+            preg_match('/<([a-zA-Z0-9_.-]+:)?calendar\s*\/?>/', $body) &&
+            str_contains($body, 'urn:ietf:params:xml:ns:caldav');
+
+        if (!$is_calendar) {
+            throw new InvalidArgumentException(
+                'The provided URL is not a CalDAV calendar, please use the URL of a specific calendar.',
+            );
+        }
+    }
+
+    /**
+     * @throws GuzzleException
+     */
+    private function get_http_client_by_provider_id(int $provider_id): Client
+    {
+        $provider = $this->CI->providers_model->find($provider_id);
+
+        if (!$provider['settings']['caldav_sync']) {
+            throw new RuntimeException('The selected provider does not have the CalDAV sync enabled: ' . $provider_id);
+        }
+
+        $caldav_url = $provider['settings']['caldav_url'];
+        $caldav_username = $provider['settings']['caldav_username'];
+        $caldav_password = $provider['settings']['caldav_password'];
+
+        return $this->get_http_client($caldav_url, $caldav_username, $caldav_password);
+    }
+
+    /**
+     * Get the URI of an event that is already stored on the CalDAV server.
+     *
+     * Falls back to the generated "<uid>.ics" URI, which is the one Easy!Appointments uses for the events it creates
+     * itself, when the server does not report a URI for the UID.
+     *
+     * @param Client $client CalDAV HTTP client.
+     * @param string $caldav_calendar CalDAV calendar URL.
+     * @param string $caldav_event_id CalDAV calendar event ID.
+     *
+     * @return string
+     */
+    private function get_existing_event_uri(Client $client, string $caldav_calendar, string $caldav_event_id): string
+    {
+        $uri = $this->get_caldav_event_uri($caldav_calendar, $caldav_event_id);
+
+        // The events that Easy!Appointments creates itself are stored under that generated URI (see
+        // Ics_file::generate_uid()), so only the imported ones have to be looked up.
+        if (str_starts_with($caldav_event_id, 'ea-')) {
+            return $uri;
+        }
+
+        return $this->find_event_uri($client, $caldav_event_id) ?? $uri;
+    }
+
+    /**
+     * Look up the URI of an event on the CalDAV server, based on its UID.
+     *
+     * Servers are free to store an event under any URI and the ones created in a calendar client (Nextcloud, Apple
+     * Calendar, ...) rarely use "<uid>.ics", so the URI of an imported event has to be requested before the event can
+     * be fetched, updated or removed. Without this the requests answer with a "not found" and the local record is
+     * removed and imported again on every synchronization.
+     *
+     * @param Client $client CalDAV HTTP client.
+     * @param string $caldav_event_id CalDAV calendar event ID.
+     *
+     * @return string|null Returns the event URI or NULL if the server does not report one.
+     */
+    private function find_event_uri(Client $client, string $caldav_event_id): ?string
+    {
+        // A single instance of a recurring event has no URI of its own, and looking its UID up would return the URI
+        // of the whole series, which must not be fetched or removed in its place.
+        if (str_contains($caldav_event_id, '-RECURRENCE-')) {
+            return null;
+        }
+
+        try {
+            $response = $client->request('REPORT', '', [
+                'headers' => [
+                    'Content-Type' => 'application/xml',
+                    'Depth' => '1',
+                ],
+                'body' =>
+                    '
+                <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+                    <d:prop>
+                        <d:getetag />
+                    </d:prop>
+                    <c:filter>
+                        <c:comp-filter name="VCALENDAR">
+                            <c:comp-filter name="VEVENT">
+                                <c:prop-filter name="UID">
+                                    <c:text-match collation="i;octet">' .
+                    htmlspecialchars($caldav_event_id, ENT_QUOTES | ENT_XML1) .
+                    '</c:text-match>
+                                </c:prop-filter>
+                            </c:comp-filter>
+                        </c:comp-filter>
+                    </c:filter>
+                </c:calendar-query>
+            ',
+            ]);
+        } catch (GuzzleException $e) {
+            $this->handle_guzzle_exception($e, 'Failed to look up the CalDAV event URI');
+
+            return null;
+        }
+
+        // Match the href of the first response, no matter which prefix the server picked for the DAV namespace.
+        if (!preg_match('~<([a-zA-Z0-9_.-]+:)?href\s*>([^<]+)</~', (string) $response->getBody(), $matches)) {
+            return null;
+        }
+
+        return trim($matches[2]) ?: null;
+    }
+
+    /**
+     * Generate the event URI, used in various requests.
+     *
+     * @param string $caldav_calendar
+     * @param string|null $caldav_event_id
+     *
+     * @return string
+     */
+    private function get_caldav_event_uri(string $caldav_calendar, ?string $caldav_event_id = null): string
+    {
+        return $caldav_event_id ? rtrim($caldav_calendar, '/') . '/' . $caldav_event_id . '.ics' : '';
+    }
+
+    /**
+     * @throws CalendarEventException
+     */
+    private function get_appointment_ics_file(
+        array $appointment,
+        array $service,
+        array $provider,
+        array $customer,
+    ): string {
+        $ics_file = $this->CI->ics_file->get_stream($appointment, $service, $provider, $customer);
+
+        return str_replace('METHOD:REQUEST', '', $ics_file);
+    }
+
+    /**
+     * @throws CalendarEventException
+     */
+    private function get_unavailability_ics_file(array $unavailability, array $provider): string
+    {
+        $ics_file = $this->CI->ics_file->get_unavailability_stream($unavailability, $provider);
+
+        return str_replace('METHOD:REQUEST', '', $ics_file);
+    }
+
+    /**
+     * Try to parse the CalDAV event date-time value with the right timezone.
+     *
+     * @throws DateMalformedStringException
+     * @throws DateInvalidTimeZoneException
+     */
+    private function parse_date_time_object(string $caldav_date_time, DateTimeZone $default_timezone_object): DateTime
+    {
+        try {
+            if (str_contains($caldav_date_time, 'TZID=')) {
+                // Extract the TZID and use it
+                preg_match('/TZID=([^:]+):/', $caldav_date_time, $matches);
+                $parsed_timezone = $matches[1];
+                $parsed_timezone_object = new DateTimeZone($parsed_timezone);
+                $date_time = preg_replace('/TZID=[^:]+:/', '', $caldav_date_time);
+                $date_time_object = new DateTime($date_time, $parsed_timezone_object);
+            } elseif (str_ends_with($caldav_date_time, 'Z')) {
+                // Handle UTC timestamps
+                $date_time_object = new DateTime($caldav_date_time, new DateTimeZone('UTC'));
+            } else {
+                // Default to the provided timezone
+                $date_time_object = new DateTime($caldav_date_time, $default_timezone_object);
+            }
+
+            return $date_time_object;
+        } catch (Throwable $e) {
+            error_log('Error parsing date-time value (' . $caldav_date_time . ') with timezone: ' . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * Convert the VEvent object to an associative array
+     *
+     * @link https://sabre.io/vobject/icalendar
+     *
+     * @param VEvent $vevent Holds the VEVENT information
+     * @param DateTimeZone $timezone_object The date timezone values
+     *
+     * @return array
+     *
+     * @throws Throwable
+     */
+    private function convert_caldav_event_to_array_event(VEvent $vevent, DateTimeZone $timezone_object): array
+    {
+        try {
+            $caldav_start_date_time = (string) $vevent->DTSTART;
+            $start_date_time_object = $this->parse_date_time_object($caldav_start_date_time, $timezone_object);
+            $start_date_time_object->setTimezone($timezone_object); // Convert to the provider timezone
+
+            $caldav_end_date_time = (string) $vevent->DTEND;
+            $end_date_time_object = $this->parse_date_time_object($caldav_end_date_time, $timezone_object);
+            $end_date_time_object->setTimezone($timezone_object); // Convert to the provider timezone
+
+            // Check if the event is recurring
+
+            $is_recurring_event =
+                isset($vevent->RRULE) ||
+                isset($vevent->RDATE) ||
+                isset($vevent->{'RECURRENCE-ID'}) ||
+                isset($vevent->EXDATE);
+
+            // Generate ID based on recurrence status
+
+            $event_id = (string) $vevent->UID;
+
+            if ($is_recurring_event) {
+                $event_id .= '-RECURRENCE-' . $caldav_start_date_time;
+            }
+
+            // Return the converted event
+
+            return [
+                'id' => $event_id,
+                'summary' => (string) $vevent->SUMMARY ?? null ?: '',
+                'start_datetime' => $start_date_time_object->format('Y-m-d H:i:s'),
+                'end_datetime' => $end_date_time_object->format('Y-m-d H:i:s'),
+                'description' => (string) $vevent->DESCRIPTION ?? null ?: '',
+                'status' => (string) $vevent->STATUS ?? null ?: 'CONFIRMED',
+                'transparency' => (string) $vevent->TRANSP ?? null ?: 'OPAQUE',
+                'location' => (string) $vevent->LOCATION ?? null ?: '',
+            ];
+        } catch (Throwable $e) {
+            error_log('Error parsing CalDAV event object (' . var_export($vevent, true) . '): ' . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * @throws GuzzleException
+     * @throws Exception
+     */
+    private function fetch_events(
+        Client $client,
+        string $start_date_time,
+        string $end_date_time,
+        DateTimeZone $timezone_object,
+    ): ResponseInterface {
+        // The provided values are naive date-times of the given timezone, while the CalDAV time-range filter is
+        // always in UTC, so they have to be converted first. Formatting them with a "Z" suffix as they are would
+        // shift the requested period by the timezone offset and leave out the events at its edges.
+        $utc_timezone_object = new DateTimeZone('UTC');
+
+        $start_date_time_object = new DateTime($start_date_time, $timezone_object);
+        $start_date_time_object->setTimezone($utc_timezone_object);
+        $formatted_start_date_time = $start_date_time_object->format('Ymd\THis\Z');
+
+        $end_date_time_object = new DateTime($end_date_time, $timezone_object);
+        $end_date_time_object->setTimezone($utc_timezone_object);
+        $formatted_end_date_time = $end_date_time_object->format('Ymd\THis\Z');
+
+        return $client->request('REPORT', '', [
+            'headers' => [
+                'Content-Type' => 'application/xml',
+                'Depth' => '1',
+            ],
+            'body' =>
+                '
+                <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+                    <d:prop>
+                        <d:getetag />
+                        <c:calendar-data />
+                    </d:prop>
+                    <c:filter>
+                        <c:comp-filter name="VCALENDAR">
+                            <c:comp-filter name="VEVENT">
+                                <c:time-range start="' .
+                $formatted_start_date_time .
+                '" end="' .
+                $formatted_end_date_time .
+                '"/>	
+                            </c:comp-filter>
+                        </c:comp-filter>
+                    </c:filter>
+                </c:calendar-query>
+            ',
+        ]);
+    }
+}

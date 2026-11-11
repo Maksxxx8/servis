@@ -1,0 +1,15 @@
+/* Beauty Studio — дополнительные стили */
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #f8fafc;
+}
+
+/* Скрыть скроллбар */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

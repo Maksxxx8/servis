@@ -1,0 +1,592 @@
+# Easy!Appointments - Changelog
+
+This file contains the code changes that were introduced into each release (starting from v1.1.0) so that is easy for
+developers to maintain and readjust their custom modifications on the main project codebase.
+
+## [1.6.1] - 2026-10-12
+
+### Added
+
+- A CalDAV section under Settings / Integrations, where the connection URLs that may point into the local network are listed
+- The calendar page now explains why a CalDAV synchronization failed and what has to be corrected, instead of only reporting that it did
+- Connecting to a CalDAV server on a local network now offers to allow its host right in the connection dialog, instead of requiring a trip to the settings; the host is only remembered once the connection actually works
+
+### Changed
+
+- Changing the password in the account settings page now requires the current password, so that a stolen session alone cannot be used to take over the account
+- The CORS origins and the cookie SameSite policy are now set in application/config/routes.php and application/config/config.php, instead of the root config.php, which keeps only the installation settings
+- The release build now falls back to running Composer inside the php-fpm container, so a Composer installation on the host machine is no longer required
+- The release package no longer includes stylesheet sources, dependency development files and unused images, which makes the download smaller
+
+### Fixed
+
+- Removing every provider from a service on the services page is now saved, instead of silently keeping the previous provider assignments (#1965)
+- The asset and release build no longer fails with permission errors on the files that the Docker containers create in the project directory
+- A failing Google Calendar synchronization no longer removes the local appointments of the sync period, so an expired token, a quota limit or an unreachable API only interrupts the sync
+- Appointment notes are no longer overwritten with the generated provider and customer details block on every CalDAV synchronization
+- CalDAV events that are stored under an address that does not match their UID are now found, so events created in a calendar client are no longer removed and imported again on every synchronization
+- Synchronizing one provider no longer removes the imported recurring CalDAV events of the other providers
+- Moving an appointment to another provider now removes the event from the calendars of the previous provider
+- The CalDAV synchronization period is now requested in UTC, so events at the edges of the period are no longer left out on installations that do not run in UTC
+- Google Calendar and CalDAV are now synchronized independently, so a failure of one of them no longer skips the other
+- The Google Calendar synchronization now fails with a clear error when the provider has no refresh token stored
+- Security: The Google Calendar API requests now verify the TLS certificate of the remote endpoint
+- Security: CalDAV connections no longer follow redirects or server links to other hosts, and no longer reach private addresses through IPv6 transition addresses or a DNS answer that changes after the check
+- HTML texts, such as the privacy policy and the terms & conditions, are now purified with a cache directory inside storage/cache, so installations with a read-only vendor directory no longer fail with a write error
+- The list of Google Calendars of a provider is no longer readable without permission, so only that provider or a user who may edit providers can fetch it
+- Searching the LDAP directory now escapes the keyword, so a search term can no longer alter the LDAP filter
+- Webhooks created or edited through the REST API can now set their secret header, so the secret token is sent with the request as it already is for webhooks configured in the backend
+- Security: Updated the Guzzle HTTP client and the phpseclib library to their patched releases, fixing outbound request and certificate handling advisories that affected the webhook, CalDAV and Google Calendar integrations
+- Editing a working plan exception now updates the existing entry, instead of adding a duplicate one next to it (#1958)
+- Google Calendar events marked as "Free" no longer block booking, so all-day events and birthdays stay bookable (#1945)
+- CalDAV Calendar events marked as free (TRANSP:TRANSPARENT) no longer block booking (#1945)
+- Providers and secretaries can no longer overwrite or reassign the appointments and unavailabilities of other providers
+- Requests with invalid parameters now respond with a "bad request" status instead of a server error
+- Services can no longer be saved with a negative price or with a slot interval of zero
+- The price, slot interval and attendants number of a service are now checked before the form is submitted
+- Show a message with the affected days when the working plan of a provider has an invalid time range
+- Ask for a confirmation when an unavailability is placed over an already booked appointment
+- The appointment dialog now validates the phone number, just like the booking page does
+- Timezone labels display the offset that is currently in effect, also during daylight saving time
+- The timezone list no longer contains duplicate names, deprecated entries or malformed offsets
+- When saving an appointment, the scheduling conflict is now confirmed before the notification question
+- The scheduling conflict dialog of a new appointment is not titled "Appointment Update" anymore
+- Show a message on the booking page when no service or provider has been selected yet
+- The appointment dialog scrolls to its validation message and clears invalid fields while typing
+- Fix the "Start date value is latter than end date." and "The operation could not completed." messages
+- Security: The CalDAV and Google Calendar sync settings of a provider can no longer be reached without logging in first
+- Security: CalDAV URLs that point into the local network are rejected again, unless the host is listed in the new CalDAV integration settings
+- Security: The CAPTCHA can no longer be skipped by leaving the field out of the login, recovery or booking request
+- Security: Login attempts are throttled again, so repeated wrong passwords are blocked as intended
+- Security: Stop unauthorized users from taking over or changing other people's appointments
+- Security: Block unsafe links in the online meeting field so they cannot run code on the calendar
+- Security: Stop the calendar from returning the Google Calendar tokens and CalDAV passwords of providers to secretary accounts
+- Security: Stop the user management pages from returning the calendar sync tokens, CalDAV passwords and password reset tokens of other accounts
+- When rescheduling an appointment, its date and time are selected again by default (#1940)
+- Rescheduling an appointment can be saved again, instead of failing with an appointment hash error
+- Show the cancel appointment text and button on a single line with even spacing
+- Fix the automated test setup
+- The provider and secretary "Mobile" number is now saved when you create or edit them
+- Fix a booking error that appeared when the booking page was embedded on another website
+- Fix a language switch error when the booking page was embedded on another website
+- The booking page now works when embedded on other websites
+- Show a clear message when the database needs to be updated, instead of a confusing error
+- Fix the month switching on the booking calendar (#1862)
+- Show appointment notes correctly in email notifications (#1881)
+- Google Meet link is created but never stored in appointments.meeting_link (#1947)
+- Security: Protected settings, such as the API token, can no longer be read or changed through the REST API by writing their name in a different letter case
+- Security: An ID in the body of a REST API update request no longer redirects the update to another record, such as an administrator account, than the one in the URL
+- Security: Saving or deleting a provider, secretary or admin now only affects users of that role, so an administrator account can no longer be overwritten or deleted, or a role changed, through another user type
+- Security: A new booking can no longer be placed on an already booked time slot by sending the ID of the existing appointment along with the booking request
+- Security: With limited customer access, providers and secretaries can no longer edit or book appointments for customers they have no appointments with through the calendar page
+- Enabling ALTCHA without generating an HMAC key no longer rejects every login and booking, the key is now created and stored on first use
+- The customer data retention cleanup now removes inactive customers again, instead of removing none of them whenever an unavailability ends after the retention cutoff
+- Two short blocked periods on the same day no longer hide all the available hours of that day on the booking page
+- Services with multiple attendants no longer offer a time slot that contains a shorter appointment of the same provider, which led to double bookings
+- Security: A solved CAPTCHA image is now only valid for one attempt, so it can no longer be reused for repeated login, password recovery or booking requests
+- Security: Deleting or viewing a customer from the backend now only works for customer accounts, so a provider or secretary can no longer delete or read the account of an admin or another staff member
+- Security: The appointment details on the booking confirmation step are now escaped, so HTML in a service or provider name can no longer run scripts in the customer's browser
+- Adding or editing an unavailability from the unavailabilities page no longer fails with a server error, and deleting one now also removes it from the synchronized Google Calendar or CalDAV calendar
+- Dates that do not exist, such as February 30, are now rejected when saving appointments, unavailabilities and blocked periods, instead of being silently stored as a different date
+
+## [1.6.0] - 2026-05-27
+
+### Added
+
+- Added request method check on each request so that only allowed methods are accepted
+- Add Jitsi integration and link generation for appointments made via the public page
+- Allow providers to toggle the syncing themselves (#1731)
+- Add new meeting link field to appointments for storing online video conference locations
+- Create new integration section for the Google Calendar integration (#1690)
+- Add settings to not display the Add to Google Calendar button in the booking confirmation page (#1763)
+- Add new Google Meet setting and meeting link support for appointments while syncing with Google (#1589)
+- Add Select All / None buttons to multi-checkbox fields
+- Add prompt for client notifications so that they are not sent every time an appointment changes
+- Add notification prompt when creating new appointments from the calendar page
+- Add notification prompt when deleting appointments from the calendar page
+- Connect RSS updates from the official blog and show them in the about page
+- ALTCHA integration added as an alternative CAPTCHA step (#1155)
+- Add a legal notice and imprint links to the booking page and the legal settings page (#1407)
+- When someone clicks on password reset, implement a link delivery and not just change the password directly
+- Login / Backend button on the disabled booking page message screen (#1777)
+- Allow customers to save their information in local storage (#1696)
+- Implementation of additional GDPR features in Easy!Appointments (#535)
+- Allow users to define working plan exceptions for multiple dates (#1706)
+- Add CAPTCHA support for all the public forms in order to block abusive requests (#1754)
+- Add validation when saving the working plan (#1758)
+
+### Changed
+
+- Improved CRUD list entries to show pointer cursor when selected
+- Centered and narrowed CRUD list and form content on larger screens for better readability
+- Refactored cleanup logic from Console controller into a dedicated Cleanup library
+- Make the phone number field of backend users optional (#1709)
+- Change the main CRUD layout and navigation structure (list first)
+- Replace the availabilities type with the new slot interval field
+- Keep the provider option selected in the booking page if possible (#1672)
+- Improve setting language by GET parameter (#1620)
+- Improved appointment deletion flow: ask notification question first, only show the cancellation reason dialog when the user chooses to notify users
+- Restyled secondary action buttons (Cancel, Close) to use the outline secondary variant for a consistent UI
+- Simplified all documentation pages for better readability by non-technical users
+- Allow users to assign a provider to the service in the services page and update the label (assign the service to)
+- Perform various security optimizations in the app
+- Custom fields are displayed in appointment details popup (#1830)
+- When booking in calendar add a new check that will detect if the selected provider is still available or not
+- If the current user has not available services or providers to be displayed in the public booking page, then show an info message instead of the booking page
+
+### Fixed
+
+- Release builds now ship only the Google Calendar service instead of every Google API service, keeping the download size small
+- Language switching now works for languages with hyphenated codes such as Brazilian Portuguese and Traditional Chinese
+- Added missing language code mappings for Brazilian Portuguese and Traditional Chinese
+- Working plan exception break inputs now use the correct size and no longer look oversized
+- "No breaks" placeholder is now removed when the first break is added to a working plan exception
+- Account page can now be saved when the phone number field is left empty
+- Booking cancellation no longer shows a success page when the appointment was not actually deleted
+- Booking cancellation no longer fails because of a security check mismatch on public booking routes
+- Booking cancellation error page now shows the real reason (for example "rate limit exceeded") instead of a generic "appointment not found" message
+- Booking cancellation no longer crashes when the cache is unavailable
+- Old session files are now cleaned up properly
+- Added automatic cleanup of cache, sessions and logs older than 90 days
+- Appointments can now be modified after a provider changes their time zone (#1789)
+- Customer appointment link in the table calendar view now opens the appointment modal as expected
+- The session garbage collector now runs periodically to prevent session storage bloat (#1793)
+- Providers can no longer pick customers they are not connected with when the customer visibility limit is enabled
+- Improved CalDAV syncing compatibility with more calendar systems (#1840)
+- Optimized backend queries during the booking process (#1721)
+- Added the sequence field to the ICS file so calendar apps correctly update appointments after multiple changes
+- Creating a "new" customer from the backend calendar appointment modal now reuses the existing customer record when the same email already exists
+- Login page username and password fields now keep proper spacing between the icon and the typed text
+- Password recovery and password reset form inputs now keep proper spacing between the icon and the typed text
+- Bottom toast notifications on mobile are now centered horizontally instead of being stuck to the left edge
+- Fixed a security issue where an administrator could inject scripts into the "booking disabled" message that would then run for every visitor of the public booking page
+- Fixed a security issue where a provider could create or modify appointments under another provider's account
+- Fixed a security issue where the CalDAV connection test could be abused to reach internal services on the server's network or leak error details from those services
+- The CalDAV safety check is now enabled by default and can be toggled inside the CalDAV library, with the local Docker test server always allowed so local setups can still test the integration
+- Fixed a security issue where a backend user could hijack another provider's Google Calendar sync by linking it to their own Google account
+- Fixed a warning that appeared in some availability API responses when booking-window settings were left empty
+- The time picker inside the working plan exception break editor is no longer cropped by the modal and now shows the full dropdown
+- Fixed a privacy issue where the appointment reschedule page exposed more customer details (email, phone, address, custom fields, etc.) than needed; only the customer's name is now embedded in the page
+- The page header now correctly picks up the configured company color on themes that previously kept a hardcoded blue border
+- The custom company color no longer overrides theme styles on buttons, forms, menus, dropdowns, alerts and lists, so the selected theme keeps its intended look
+- The "Booking Link" label next to the link icon on the Providers and Services pages was replaced with a tooltip on hover for a cleaner look
+- Calendar table view filters now lay out cleanly on mobile, with the provider and service filters on their own rows below the date controls
+- Calendar month view day numbers no longer appear underlined or in the link color
+- Webhooks are now triggered only for the exact actions they are subscribed to, instead of matching similarly named actions by substring
+- Google Calendar sync no longer silently drops events from large calendars (more than ~250 events); the sync now pages through all events
+- Fixed a parse error in the Italian, Catalan, French and Luxembourgish translations of the CAPTCHA warning message caused by unescaped apostrophes
+- Flatpickr month picker no longer cuts off the bottom of month names with descenders
+- Corrected the "notify users on update" question translation in 40 non-English language files so it matches the intended English meaning
+- Fixed an error when deleting personal information from the Privacy page on installations where the cache is unavailable
+- Read-only and disabled form fields are now readable on dark themes
+- Dark themes are no longer overridden by a light page background, even when a custom company color is configured
+- Improved the contrast of the secondary color on the Darkly theme so buttons, links and text are easier to read
+- Section headings on CRUD and settings pages (e.g. "Details") are now readable on dark themes
+- Cards on the services, providers, secretaries, customers and integrations pages now follow the theme background instead of being forced to white
+- Form inputs on the Materia theme now show the Material-style underline on focus instead of a full border (also fixes related visual glitches on Cosmo alerts and Darkly/Flatly pagination)
+- The dropdown caret is now visible on timezone selects and the Google Calendar sync select across all themes
+- Filter list hover background is now readable on dark themes
+
+### Removed
+
+- Remove the patch.php file
+
+## [1.5.2] - 2025-08-26
+
+### Fixed
+
+- Fix the GTag script URL html rendering (#1666)
+- Fix the "Load More" JS error in secretaries page (#1677)
+- Fix the PHP compatibility error of the appointments index API endpoint (#1678)
+- Catch individual email delivery exceptions (#1670)
+- Apply permission checks to the appointment and unavailability search (#1753)
+- Make sure the sync button is visible on provider log in (#1749)
+- Update unavailable dates after applying appointment data while rescheduling (#1662)
+- Make sure that any-provider does not include hidden providers while generating availability (#1733)
+- Provide "text" version of the emails in addition to HTML (#1711)
+- Trigger webhook requests when managing records via the API (#1676)
+
+## [1.5.1] - 2025-01-20
+
+### Added
+
+- Add support for PHP 8.4 (#1640)
+- Add new secret token header field to webhooks and default to X-EA-Token (#1607)
+- Add company colors to notifications (#1569)
+- Add Albanian Language Translations (#1646)
+
+### Fixed
+
+- Fix the date parsing issue on Safari web browsers during the booking process (#1584)
+- Fix working plan configuration am/pm hour parsing so that it works in all languages (#1606)
+- Improve the CalDAV syncing mechanism so that it connects to more systems without problems (#1622)
+- Fix various 1.5.0 API issues (#1562)
+- Correct email issues by replacing the internal email library with phpmailer (#1587)
+- Fix ICS file mimetype (#1630)
+- Incorrect Timezone Handling in CalDAV Synchronization Causes Time Shifts (#1626)
+- No color change in the appointment modal window (in the backend calendar) (#1641)
+- The plain user password might appear in the log messages in case of an error (#1590)
+- Fix loop when going a month back in an edge case (#1577)
+- Dedicated provider links do not pre-select the relevant provider on the booking page (#1651)
+- Correct the service / provider booking header display (#1650)
+
+## [1.5.0] - 2024-07-07
+
+### Added
+
+- Display month with the earliest available day (#1075)
+- Allow admins to define the business closed dates (blocked-periods) (#432)
+- Allow working plan exceptions to be defined as non-working days (#1383)
+- Create an official docker image of the project and host it on Docker Hub(#1116)
+- Automatically select the next available date in the booking page or display a message if this month is unavailable (#1204)
+- Add Open Graph information to the public booking page so that it renders nicely once shared on social media apps (#1382)
+- Preselect the date with a query parameter (#1376)
+- Add the location and notes fields to the appointment email notifications (if a value was provided) (#1341)
+- Add date, from and till query parameters to the filter the appointments index results by date (#1134)
+- Allow the users to define their own status and assign them to appointments (#244)
+- Add new setting for limiting new public bookings in the future (#1203)
+- Automatically enable the secure cookie config if the current installation uses HTTPS (#1126)
+- Add language and timezone properties to the customer API resource (#1157)
+- Add support for the definition of custom webhooks via the settings page (#581)
+- Allow the user to select their own preferred language (#1263)
+- Support multiple Bootswatch themes for the app (#1205)
+- Providers and secretaries must only be able to see and manage their own customers (#1199)
+- Use the default service duration if the user just clicks on a calendar slot for creating a new appointment (#1237)
+- Google Calendar synchronisation failure when symbols/emoji appear in events to be imported (#1182)
+- Add the customer timezone field in the appointment modal of the calendar page (#1094)
+- Add a new setting that toggles the login link of the booking page (#1148)
+- Add custom Matomo analytics integration (#974)
+- Prefill the form field though url parameters (#1021)
+- Color code events by provider or service (#422)
+- Service duration values shorter than 5 minutes should be acceptable via the services page (#1110)
+- Add a new "is_private" flag to services and providers so that they do not appear in the booking page (#378)
+- Skip the first booking step when only one service and one provider are available (#349)
+- Enable the change of the brand logo and colors from the backend (#789)
+- Add the ability to temporarily block new appointments / set away message (#940)
+- Add optional (configurable with setting) phone number validation (#820)
+- Add an option to deactivate the remove-all-data function for customers (#808)
+- Skip the first booking step if both provider and service are preselected (#1117)
+- Make delete appointment via API to send emails just like the calendar page does (#1101)
+- Create new layout structure for the markup, so that common HTML markup is being reused (#1152)
+- Have an option to hide customer data fields during booking (#1081)
+- Add a SECURITY.md file to the repository (#1122)
+- Add support for custom fields on customers (#1133)
+- Add from email/name and reply-to settings in the email.php configuration file (#1465)
+- Create a new setting that will define the default timezone of the application (#1390)
+- Integrate CalDAV Protocol for appointment syncing (#209)
+- Add LDAP / Active Directory integration (#128)
+
+### Changed
+
+- Do not allow a customer to book the same hours multiple times (#1420)
+- All the user roles with access to the backend calendar page can filter by services (#956)
+- Update Bootstrap to version 5 (#1150)
+- Update FullCalendar to version 5 (#1151)
+- The availability generation algorithm needs performance improvements when many appointments are stored in the system (#1171)
+- Support for relative paths when loading resources or working with the session (#1158)
+- Support line breaks when displaying the service description (#1149)
+- Remove the CodeIgniter fork from the composer.json file and re-import the system directory (#1109)
+
+### Fixed
+
+- Sync all the providers without errors, when the user clicks on the "sync" button and "all" is selected in the calendar page (#1365)
+- Non-working time not showing correctly in the week view of calendar (#1381)
+- Make sure the booking cancellation is a post request and has a reason value provided (#1178)
+
+### Removed
+
+- Remove the engine directory and files form the app (they're deprecated) (#971)
+- Remove the PHPMailer dependency from the app and use the built-in CodeIgniter mailer (#970)
+
+## [1.4.3] - 2022-03-08
+
+### Added
+
+- #1208: Security configuration enhancements in the application.
+- #1209: Add support for PHP 8.1.
+
+### Changed
+
+- #1207: Replace CodeIgniter with the system directory for smaller package size and more control over the framework.
+- #1210: Move the change language operation into a new public controller.
+- #1212: Remove the Google Calendar read-only scope use as it is not needed.
+- #1213: Switch to go-to-latest database migration configuration for simplicity.
+- #1216 Replace Google Client JS with the Google Calendar Template link in the book success page enhancement.
+
+### Fixed
+
+- #1211: The table calendar view breaks for secretaries and providers due to appointment and unavailability removals bug.
+- #1214: Provider and secretary users can only add unavailabilities for their authorized users bug.
+
+## [1.4.2] - 2021-07-27
+
+### Added
+
+- #1004: Add support for line breaks when displaying the service description in the frontend.
+- #1040: Support all-day events while syncing with Google Calendar.
+
+### Fixed
+
+- #961: Timezone/UX issue: Wrong day is selected when timezone differs by -1 day.
+- #966: Secretaries are getting notification emails for providers that are not assigned to them.
+- #980: Missing Pacific (and potentially other) timezones.
+- #982: The Any-Provider option might lead to double bookings, if all the providers have the same number of appointments for the selected date.
+- #986: Managed to replicate appointment hash collisions.
+- #989: Fix Critical mistake resulting in wrong date
+- #990: The API availabilities controller throws an error when generating availability for services with multiple attendants.
+- #991: Available hours generated with the "Any Provider" option in the booking page, may use the information of a provider that is not assigned to the selected service.
+- #993: Add support for PHP8 (vendor packages need to be updated).
+- #1000: Small fix for the display of the delete button in table view.
+- #1011: Working plan exception - details pane shows incorrect details.
+- #1023: Backend calendar table events missing or duplicated.
+- #1026: The timepicker sliders do not work when using an iOS device.
+- #1029: Enhance SMTP functions of PHPMailer.
+- #1043: Unavailable events do not block time from services with multiple attendants.
+- #1046: Make sure that saving the modifications of a single break does not cancel any pending break edits.
+- #1068: Set minimum service duration field value to honor the value of EVENT_MINIMUM_DURATION.
+- #1073: Update PHPMailer dependencies.
+- #1074: In case of deletion of one appointment, system sends email to admins anyway even if they have email notifications disabled.
+- #1092: Javascript RangeError on appointment change causing disabled calendar dates.
+
+## [1.4.1] - 2020-12-14
+
+### Added
+
+- #952: Add timezone support in the REST API, when managing users.
+- #955: Display confirmation modal when disabling a connected Google Calendar Sync.
+
+### Fixed
+
+- #945: Google Calendar sync throws an error with all day Google Calendar Events.
+- #946: Typo in JavaScript code leads to a broken calendar view, when loading unavailability events with note contents.
+- #948: Multiple attendant services may lead to double booking.
+- #950: Cannot create provider without services via the API, some values (other endpoints) are optional too.
+- #953: Current time indicator in fullcalendar is showing time in local timezone and not in the user selected timezone.
+- #954: The password must be provided via the API when creating new users.
+
+## [1.4.0] - 2020-12-09
+
+### Added
+
+- #203: Appointment location / 12-hour format / sync notes and location in Google Calendar.
+- #221: Fixed/Improved sort breaks increasingly by hour within day.
+- #247: Add new system-wide setting for removing the "Any Provider" option of the booking page.
+- #251: Automatically populate the appointment end datetime in API.
+- #301: Automatically reload the backend calendar events.
+- #313: How to set the timezone from the user booking the appointment.
+- #365: Only allow appointments for a few weeks in advance.
+- #431: Add support for working plan exceptions.
+- #471: Add new system-wide setting that enable users to choose the first day of the week.
+- #496: Add pagination on every backend page in order to make filter requests faster.
+- #501: Integrate script for assets minification.
+- #502: Config::DEBUG value toggles the use of normal or minified asset files.
+- #546: Add appointment edit link in the backend customers page.
+- #550: Multi-Lang Front-End selection popup not working on mobile.
+- #551: Front-End booking calendar not syncing with business logic working plan.
+- #572: Ensure the database structure is compatible to at least MySQL 5.5.
+- #576: Appointment cancelled exception not showing properly.
+- #610: Token based authentication for the Rest API.
+- #648: Add a warning when customers delete their personal information.
+- #655: Creating an appointment requires user to enter their phone number enhancement.
+- #659: Automatically detect browser language enhancement.
+- #663: Language selector not working under legacy iOS (v.10.3.1).
+- #680: Generate new password in the generate_random_string function may create duplicate passwords, plus it is not secure enough.
+- #739: Enhance the table view mode by replacing the tables with fullcalendar instances.
+- #770: Store customer's language and use it with notifications or when the customer manages and existing appointment.
+- #889: Notify admins and secretaries on appointment changes.
+
+### Changed
+
+- #386: Service price should be optional.
+- #428: Enable book advance timeout values in days.
+- #568: Sort providers alphabetically in the booking page.
+- #745: Add appointment notes preview in the event popover.
+
+### Fixed
+
+- #171: Google calendar sync - wrong timezone for appointments.
+- #195: Fix Google calendar sync activation error (JavaScript).
+- #298: Provider availability issue when selecting the "Any Provider" option.
+- #396: Start and end time do not update correctly during calendar time selection on iPad (and other Safari based devices).
+- #447: Captcha error using docker (500 error).
+- #506: Working plan created in version v1.2.1 wrongly displayed in backend with version v1.3.1.
+- #507: Need to manually clean the cache when migrating from v1.2.1 to v1.3.1.
+- #541: Can't remove (empty) customer notes field.
+- #549: Querying appointments API endpoint with the q parmeter produces PHP warnings.
+- #557: App not connecting to MySQL with fresh docker run.
+- #562: Unavailability periods with length of more than 1 day are not handled correctly.
+- #563: Description field overflows with long text.
+- #600: Unable to select Language on mobile phones.
+- #611: Double replacement when using translation to other languages.
+- #664: Easy!Appointments v1.3.2 allows sensitive information disclosure (username and password hash).
+- #687: Errors when the provider modifies an appointment.
+- #705: The alert notification of the installation is not being displayed on error.
+- #757: Corrected display of datetimepickers when editing events.
+- #801: Invalid time duration during appointment registration could lead to DOS of the service.
+- #813: Hyperlinks are not being displayed correctly inside legal contents (they are escaped).
+- #839: Provider is missing on appointment modal opened after a click on the link sent with the provider email confirmation.
+- #840: Start/end datetime are not correctly initialized on Safari when the appointment modal is opened after a click in the backend calendar.
+- #883: Appointment date is wrongly changed to today in some case.
+- #903: Notification not working when creating/updating/deleting an appointment from the REST API.
+
+## [1.3.2] - 2018-07-29
+
+### Fixed
+
+- #480: Make the app GDPR - new EU privacy regulations compliant.
+- #485: Make REST API search check with "q" parameter case insensitive.
+- #489: REST API response headers must use the Content-Type application/json value.
+- #500: Performance optimization in backend calendar page, after the user clicks the insert appointment button.
+- #510: Providers should not be able to create appointments for other providers in the backend calendar page.
+- #512: Only show appointments of the currently logged in provider.
+
+## [1.3.1] - 2018-06-03
+
+### Added
+
+- #410: Time format from American style to European
+- #441: Added time format selection
+- #452: Provide more information when errors occur during the installation.
+
+### Changed
+
+- #494: French translation corrections/improvements.
+
+### Fixed
+
+- #433: Selected date when editing an appointment
+- #436: All days unavailable in agendaDay view
+- #438: Error on update process from 1.2.1 to 1.3.0
+- #440: Correct label text for customer phone number in back-end calendar event popup.
+- #453: Unavailable periods not taken into account when more than one customer
+- #455: French Spelling
+- #459: Aggregate Appointment API crashes when a break was added
+- #461: Invalid working plan parsing for foreign languages on day view of the default calendar view.
+- #475: Booking page date selection is broken with any_provider option selected.
+- #483: In backend, calendar for providers become unselectable if switched to calendar for service.
+- #491: Replace hardcoded string with translation in appointment details email template.
+- #495: Database migration fixes (from 1.2.1 to 1.3.x).
+- #497: Backend settings are not being displayed on page load when the user is not an admin.
+
+## [1.3.0] - 2018-02-28
+
+### Added
+
+- #65: Insert new appointment by clicking directly on the calendar.
+- #122: Add customer email and phone number in the event popover of the backend/calendar page.
+- #152: Add support for American Time Format (AM/PM).
+- #176: Add Docker container for Easy!Appointments development.
+- #362: Add Arabic language translation.
+- #395: Add aggregates GET parameter in the appointments REST API resource.
+- #397: Allow PHP v7.1 compatibility.
+- #398: Send ICS files with customer/provider email confirmations.
+- #399: Integrate cache busting for assets into the app.
+- #402: Create simple "update" page.
+
+### Changed
+
+- #276: Update FullCalendar dependency.
+- #394: Corrections in the Bootstrap classes in view files.
+- #401: Replace loading spinner graphic with a newer one.
+- #403: All calendars will start with Sunday as the first day.
+
+### Fixed
+
+- #155: Appointment management modal is not updated after appointment duration resize.
+- #236: Duplicate availabilities with short service duration and unavailabilities ignorance.
+- #315: Calendar doesn't update when Attendants number changes.
+- #334: Use of session_start() function may cause issues as the default options are not being used.
+- #336: Deleting provider doesn't work in some languages.
+- #337: Full day appointment with multiple attendants are not being taken into concern during availabilities generation.
+- #342: Email notifications must honor the date format value.
+- #370: AJAX Error: SyntaxError: Unexpected token < in JSON at position 0
+
+### Removed
+
+- #400: Remove jscrollpane dependency.
+
+### Deprecated
+
+- The availabilities generation and AJAX endpoints will change with a future release.
+
+## [1.2.1] - 2017-05-21
+
+### Changed
+
+- #241: Set default sessions save_path directory because many servers do not have this option set.
+
+### Fixed
+
+- #306: Back-end login does not work with PHP 7.1.
+
+## [1.2.0] - 2016-11-09
+
+### Added
+
+- #24: Provide dedicated URL for separate provider/service bookings.
+- #45: Add secure flag to CI_SESSION when HTTPS is enabled.
+- #54: Default auto-complete for the appointment end time according to service duration.
+- #109: Accept multiple attendants in a single service session.
+- #180: Add login link to booking footer.
+- #182: Add new appointment dashboard view: Table Scheduler
+- #183: Display the appointments modal when the user clicks in an empty calendar slot.
+- #185: Enable fixed availabilities setting for services.
+- #174: Implementation of a REST API.
+- #175: The backend must be responsive as well.
+- #178: Load the application/config/email.php settings to PHPMailer instance.
+
+### Changed
+
+- #63: Update vendor files (CodeIgniter, FullCalendar, Bootstrap, jQuery ...)
+
+### Fixed
+
+- #173: JS Scrollbars do not work for backend/users entries.
+- #137: Invalid responsive behavior in frontend booking wizard (step #2 - appointment date & time).
+- #136: Loading spinner is not shown in during the installation.
+- #127: Links in header contain index.php
+- #22: Google Calendar Sync - Time Zone Issue
+
+## [1.1.1] - 2016-02-14
+
+### Fixed
+
+- #116: Book advance timeout not taken into account for proposed appointments.
+- #118: Google Calendar and notification mail problem bug.
+- #120: Invalid appointment date set after editing an existing appointment.
+
+## [1.1.0] 2016-01-24
+
+### Added
+
+- #14: Add Google Analytics tracking for the booking page.
+- #15: Add captcha to booking page.
+- #16: Responsive Frontend
+- #25: Add a disable customer mail notifications setting
+- #27: Support american time format within the app.
+- #31: Double booking when two users try to book the same appointment hour and at the same time.
+
+### Changed
+
+- #4: Raising more useful exceptions and enable error logging by default.
+- #13: Upgrade to Bootstrap 3.x.x.
+- #38: Renamed `configuration.php` file to `config.php` and changed the `SystemConfiguration` class to `Config`. This class will contain constants with the project configuration and will be statically used.
+- #39: Add latest translations to source code so that user can select them immediately.
+- #42: Place all external assets to "ext" directory.
+
+### Removed
+
+- #40: Removed `.htaccess` file and updated all the URLs with the `index.php` file so that mod_rewrite problems are eliminated.
+- #41: Removed `cancel.php` file. Frontend must use the `message.php` file for displaying simple messages to user.
+
+### Fixed
+
+- #6: Business Logic created is not getting assigned to service provider.
+- #10: Unable to use address tags in email address.
+- #18: Duration is not changing when adding a new appointment.
+- #21: Fix Easy!Appointments installation problems with AJAX requests.
+- #66: Trouble with breaks for providers.
+
+## [1.0.0] - 2014-01-19
+
+First Easy!Appointments release ever! ☺

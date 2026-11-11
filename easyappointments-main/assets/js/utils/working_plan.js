@@ -1,0 +1,979 @@
+/* ----------------------------------------------------------------------------
+ * Easy!Appointments - Online Appointment Scheduler
+ *
+ * @package     EasyAppointments
+ * @author      A.Tselegidis <alextselegidis@gmail.com>
+ * @copyright   Copyright (c) Alex Tselegidis
+ * @license     https://opensource.org/licenses/GPL-3.0 - GPLv3
+ * @link        https://easyappointments.org
+ * @since       v1.5.0
+ * ---------------------------------------------------------------------------- */
+
+/**
+ * Working plan utility.
+ *
+ * This module implements the functionality of working plans.
+ */
+App.Utils.WorkingPlan = (function () {
+    const moment = window.moment;
+
+    /**
+     * Class WorkingPlan
+     *
+     * Contains the working plan functionality. The working plan DOM elements must be same
+     * in every page this class is used.
+     *
+     * @class WorkingPlan
+     */
+    class WorkingPlan {
+        /**
+         * This flag is used when trying to cancel row editing. It is
+         * true only whenever the user presses the cancel button.
+         *
+         * @type {Boolean}
+         */
+        enableCancel = false;
+
+        /**
+         * This flag determines whether the jeditables are allowed to submit. It is
+         * true only whenever the user presses the save button.
+         *
+         * @type {Boolean}
+         */
+        enableSubmit = false;
+
+        /**
+         * Set up the dom elements of a given working plan.
+         *
+         * @param {Object} workingPlan Contains the working hours and breaks for each day of the week.
+         */
+        setup(workingPlan) {
+            const weekDayId = App.Utils.Date.getWeekdayId(vars('first_weekday'));
+            const workingPlanSorted = App.Utils.Date.sortWeekDictionary(workingPlan, weekDayId);
+
+            $('.working-plan tbody').empty();
+            $('.breaks tbody').empty();
+
+            // Build working plan day list starting with the first weekday as set in the General settings
+            const timeFormat = vars('time_format') === 'regular' ? 'h:mm a' : 'HH:mm';
+
+            $.each(
+                workingPlanSorted,
+                function (index, workingDay) {
+                    const day = this.convertValueToDay(index);
+
+                    const dayDisplayName = App.Utils.String.upperCaseFirstLetter(day);
+
+                    $('<tr/>', {
+                        'html': [
+                            $('<td/>', {
+                                'html': [
+                                    $('<div/>', {
+                                        'class': 'checkbox form-check',
+                                        'html': [
+                                            $('<input/>', {
+                                                'class': 'form-check-input',
+                                                'type': 'checkbox',
+                                                'id': index,
+                                            }),
+                                            $('<label/>', {
+                                                'class': 'form-check-label',
+                                                'text': dayDisplayName,
+                                                'for': index,
+                                            }),
+                                        ],
+                                    }),
+                                ],
+                            }),
+                            $('<td/>', {
+                                'html': [
+                                    $('<input/>', {
+                                        'id': index + '-start',
+                                        'class': 'work-start form-control form-control-sm',
+                                    }),
+                                ],
+                            }),
+                            $('<td/>', {
+                                'html': [
+                                    $('<input/>', {
+                                        'id': index + '-end',
+                                        'class': 'work-end form-control form-control-sm',
+                                    }),
+                                ],
+                            }),
+                        ],
+                    }).appendTo('.working-plan tbody');
+
+                    if (workingDay) {
+                        $('#' + index).prop('checked', true);
+                        $('#' + index + '-start').val(
+                            moment(workingDay.start, 'HH:mm').format(timeFormat).toLowerCase(),
+                        );
+                        $('#' + index + '-end').val(moment(workingDay.end, 'HH:mm').format(timeFormat).toLowerCase());
+
+                        // Sort day's breaks according to the starting hour
+                        workingDay.breaks.sort(function (break1, break2) {
+                            // We can do a direct string comparison since we have time based on 24 hours clock.
+                            return break1.start.localeCompare(break2.start);
+                        });
+
+                        workingDay.breaks.forEach(function (workingDayBreak) {
+                            $('<tr/>', {
+                                'html': [
+                                    $('<td/>', {
+                                        'class': 'break-day editable',
+                                        'text': dayDisplayName,
+                                    }),
+                                    $('<td/>', {
+                                        'class': 'break-start editable',
+                                        'text': moment(workingDayBreak.start, 'HH:mm').format(timeFormat).toLowerCase(),
+                                    }),
+                                    $('<td/>', {
+                                        'class': 'break-end editable',
+                                        'text': moment(workingDayBreak.end, 'HH:mm').format(timeFormat).toLowerCase(),
+                                    }),
+                                    $('<td/>', {
+                                        'html': [
+                                            $('<button/>', {
+                                                'type': 'button',
+                                                'class': 'btn btn-outline-secondary btn-sm edit-break',
+                                                'title': lang('edit'),
+                                                'html': [
+                                                    $('<span/>', {
+                                                        'class': 'fas fa-edit',
+                                                    }),
+                                                ],
+                                            }),
+                                            $('<button/>', {
+                                                'type': 'button',
+                                                'class': 'btn btn-outline-secondary btn-sm delete-break',
+                                                'title': lang('delete'),
+                                                'html': [
+                                                    $('<span/>', {
+                                                        'class': 'fas fa-trash-alt',
+                                                    }),
+                                                ],
+                                            }),
+                                            $('<button/>', {
+                                                'type': 'button',
+                                                'class': 'btn btn-outline-secondary btn-sm save-break d-none',
+                                                'title': lang('save'),
+                                                'html': [
+                                                    $('<span/>', {
+                                                        'class': 'fas fa-check-circle',
+                                                    }),
+                                                ],
+                                            }),
+                                            $('<button/>', {
+                                                'type': 'button',
+                                                'class': 'btn btn-outline-secondary btn-sm cancel-break d-none',
+                                                'title': lang('cancel'),
+                                                'html': [
+                                                    $('<span/>', {
+                                                        'class': 'fas fa-ban',
+                                                    }),
+                                                ],
+                                            }),
+                                        ],
+                                    }),
+                                ],
+                            }).appendTo('.breaks tbody');
+                        });
+                    } else {
+                        $('#' + index).prop('checked', false);
+                        $('#' + index + '-start').prop('disabled', true);
+                        $('#' + index + '-end').prop('disabled', true);
+                    }
+                }.bind(this),
+            );
+
+            // Make break cells editable.
+            this.editableDayCell($('.breaks .break-day'));
+            this.editableTimeCell($('.breaks').find('.break-start, .break-end'));
+        }
+
+        /**
+         * Setup the dom elements of a given working plan exceptions array.
+         *
+         * @param {Array} workingPlanExceptions Array of working plan exception objects.
+         */
+        setupWorkingPlanExceptions(workingPlanExceptions) {
+            if (!Array.isArray(workingPlanExceptions)) {
+                // Handle legacy format (date-keyed object) by converting to array
+                const exceptions = [];
+                for (const date in workingPlanExceptions) {
+                    const exception = workingPlanExceptions[date];
+                    exceptions.push({
+                        startDate: date,
+                        endDate: date,
+                        startTime: exception?.start || null,
+                        endTime: exception?.end || null,
+                        breaks: exception?.breaks || [],
+                    });
+                }
+                workingPlanExceptions = exceptions;
+            }
+
+            workingPlanExceptions.forEach((workingPlanException) => {
+                this.renderWorkingPlanExceptionRow(workingPlanException).appendTo('.working-plan-exceptions tbody');
+            });
+        }
+
+        /**
+         * Enable editable break day.
+         *
+         * This method makes editable the break day cells.
+         *
+         * @param {Object} $selector The jquery selector ready for use.
+         */
+        editableDayCell($selector) {
+            const weekDays = {};
+            weekDays[lang('sunday')] = lang('sunday'); //'Sunday';
+            weekDays[lang('monday')] = lang('monday'); //'Monday';
+            weekDays[lang('tuesday')] = lang('tuesday'); //'Tuesday';
+            weekDays[lang('wednesday')] = lang('wednesday'); //'Wednesday';
+            weekDays[lang('thursday')] = lang('thursday'); //'Thursday';
+            weekDays[lang('friday')] = lang('friday'); //'Friday';
+            weekDays[lang('saturday')] = lang('saturday'); //'Saturday';
+
+            $selector.editable(
+                function (value) {
+                    return value;
+                },
+                {
+                    type: 'select',
+                    data: weekDays,
+                    event: 'edit',
+                    width: '100px',
+                    height: '30px',
+                    submit: '<button type="button" class="d-none submit-editable">Submit</button>',
+                    cancel: '<button type="button" class="d-none cancel-editable">Cancel</button>',
+                    onblur: 'ignore',
+                    onreset: function () {
+                        if (!this.enableCancel) {
+                            return false; // disable ESC button
+                        }
+                    }.bind(this),
+                    onsubmit: function () {
+                        if (!this.enableSubmit) {
+                            return false; // disable Enter button
+                        }
+                    }.bind(this),
+                },
+            );
+        }
+
+        /**
+         * Enable editable break time.
+         *
+         * This method makes editable the break time cells.
+         *
+         * @param {Object} $selector The jquery selector ready for use.
+         */
+        editableTimeCell($selector) {
+            $selector.editable(
+                function (value) {
+                    // Do not return the value because the user needs to press the "Save" button.
+                    return value;
+                },
+                {
+                    event: 'edit',
+                    width: '100px',
+                    height: '30px',
+                    submit: $('<button/>', {
+                        'type': 'button',
+                        'class': 'd-none submit-editable',
+                        'text': lang('save'),
+                    }).get(0).outerHTML,
+                    cancel: $('<button/>', {
+                        'type': 'button',
+                        'class': 'd-none cancel-editable',
+                        'text': lang('cancel'),
+                    }).get(0).outerHTML,
+                    onblur: 'ignore',
+                    onreset: function () {
+                        if (!this.enableCancel) {
+                            return false; // disable ESC button
+                        }
+                    }.bind(this),
+                    onsubmit: function () {
+                        if (!this.enableSubmit) {
+                            return false; // disable Enter button
+                        }
+                    }.bind(this),
+                },
+            );
+        }
+
+        /**
+         * Render a working plan exception row.
+         *
+         * This method makes editable the break time cells.
+         *
+         * @param {Object} workingPlanException Contains exception information (startDate, endDate, startTime, endTime, breaks).
+         */
+        renderWorkingPlanExceptionRow(workingPlanException) {
+            const timeFormat = vars('time_format') === 'regular' ? 'h:mm a' : 'HH:mm';
+
+            const startDate = workingPlanException.startDate;
+            const endDate = workingPlanException.endDate;
+            const startTime = workingPlanException.startTime;
+            const endTime = workingPlanException.endTime;
+
+            // Format the date range display
+            let dateDisplay;
+            if (startDate === endDate) {
+                dateDisplay = App.Utils.Date.format(startDate, vars('date_format'), vars('time_format'), false);
+            } else {
+                dateDisplay =
+                    App.Utils.Date.format(startDate, vars('date_format'), vars('time_format'), false) +
+                    ' - ' +
+                    App.Utils.Date.format(endDate, vars('date_format'), vars('time_format'), false);
+            }
+
+            return $('<tr/>', {
+                'data': {
+                    'workingPlanException': workingPlanException,
+                },
+                'html': [
+                    $('<td/>', {
+                        'class': 'working-plan-exception-date',
+                        'text': dateDisplay,
+                    }),
+                    $('<td/>', {
+                        'class': 'working-plan-exception--start',
+                        'text': startTime ? moment(startTime, 'HH:mm').format(timeFormat).toLowerCase() : '-',
+                    }),
+                    $('<td/>', {
+                        'class': 'working-plan-exception--end',
+                        'text': endTime ? moment(endTime, 'HH:mm').format(timeFormat).toLowerCase() : '-',
+                    }),
+                    $('<td/>', {
+                        'html': [
+                            $('<button/>', {
+                                'type': 'button',
+                                'class': 'btn btn-outline-secondary btn-sm edit-working-plan-exception',
+                                'title': lang('edit'),
+                                'html': [
+                                    $('<span/>', {
+                                        'class': 'fas fa-edit',
+                                    }),
+                                ],
+                            }),
+                            $('<button/>', {
+                                'type': 'button',
+                                'class': 'btn btn-outline-secondary btn-sm delete-working-plan-exception',
+                                'title': lang('delete'),
+                                'html': [
+                                    $('<span/>', {
+                                        'class': 'fas fa-trash-alt',
+                                    }),
+                                ],
+                            }),
+                        ],
+                    }),
+                ],
+            });
+        }
+
+        /**
+         * Add the utility event listeners.
+         */
+        addEventListeners() {
+            /**
+             * Event: Day Checkbox "Click"
+             *
+             * Enable or disable the time selection for each day.
+             *
+             * @param {jQuery.Event} event
+             */
+            $('.working-plan tbody').on('click', 'input:checkbox', (event) => {
+                const id = $(event.currentTarget).attr('id');
+
+                const isRegularFormat = vars('time_format') === 'regular';
+                const defaultStartTime = isRegularFormat ? '9:00 am' : '09:00';
+                const defaultEndTime = isRegularFormat ? '6:00 pm' : '18:00';
+
+                if ($(event.currentTarget).prop('checked') === true) {
+                    $('#' + id + '-start')
+                        .prop('disabled', false)
+                        .val(defaultStartTime);
+                    $('#' + id + '-end')
+                        .prop('disabled', false)
+                        .val(defaultEndTime);
+                } else {
+                    $('#' + id + '-start')
+                        .prop('disabled', true)
+                        .val('');
+                    $('#' + id + '-end')
+                        .prop('disabled', true)
+                        .val('');
+                }
+            });
+
+            /**
+             * Event: Add Break Button "Click"
+             *
+             * A new row is added on the table and the user can enter the new break
+             * data. After that he can either press the save or cancel button.
+             */
+            $('.add-break').on('click', () => {
+                const timeFormat = vars('time_format') === 'regular' ? 'h:mm a' : 'HH:mm';
+
+                const $newBreak = $('<tr/>', {
+                    'html': [
+                        $('<td/>', {
+                            'class': 'break-day editable',
+                            'text': lang('sunday'),
+                        }),
+                        $('<td/>', {
+                            'class': 'break-start editable',
+                            'text': moment('12:00', 'HH:mm').format(timeFormat).toLowerCase(),
+                        }),
+                        $('<td/>', {
+                            'class': 'break-end editable',
+                            'text': moment('14:00', 'HH:mm').format(timeFormat).toLowerCase(),
+                        }),
+                        $('<td/>', {
+                            'html': [
+                                $('<button/>', {
+                                    'type': 'button',
+                                    'class': 'btn btn-outline-secondary btn-sm edit-break',
+                                    'title': lang('edit'),
+                                    'html': [
+                                        $('<span/>', {
+                                            'class': 'fas fa-edit',
+                                        }),
+                                    ],
+                                }),
+                                $('<button/>', {
+                                    'type': 'button',
+                                    'class': 'btn btn-outline-secondary btn-sm delete-break',
+                                    'title': lang('delete'),
+                                    'html': [
+                                        $('<span/>', {
+                                            'class': 'fas fa-trash-alt',
+                                        }),
+                                    ],
+                                }),
+                                $('<button/>', {
+                                    'type': 'button',
+                                    'class': 'btn btn-outline-secondary btn-sm save-break d-none',
+                                    'title': lang('save'),
+                                    'html': [
+                                        $('<span/>', {
+                                            'class': 'fas fa-check-circle',
+                                        }),
+                                    ],
+                                }),
+                                $('<button/>', {
+                                    'type': 'button',
+                                    'class': 'btn btn-outline-secondary btn-sm cancel-break d-none',
+                                    'title': lang('cancel'),
+                                    'html': [
+                                        $('<span/>', {
+                                            'class': 'fas fa-ban',
+                                        }),
+                                    ],
+                                }),
+                            ],
+                        }),
+                    ],
+                }).appendTo('.breaks tbody');
+
+                // Bind editable and event handlers.
+                this.editableDayCell($newBreak.find('.break-day'));
+                this.editableTimeCell($newBreak.find('.break-start, .break-end'));
+                $newBreak.find('.edit-break').trigger('click');
+            });
+
+            /**
+             * Event: Edit Break Button "Click"
+             *
+             * Enables the row editing for the "Breaks" table rows.
+             *
+             * @param {jQuery.Event} event
+             */
+            $(document).on('click', '.edit-break', (event) => {
+                // Reset previous editable table cells.
+                const $previousEdits = $(event.currentTarget).closest('table').find('.editable');
+
+                $previousEdits.each(function (index, editable) {
+                    if (editable.reset) {
+                        editable.reset();
+                    }
+                });
+
+                // Make all cells in current row editable.
+                const $tr = $(event.currentTarget).closest('tr');
+
+                $tr.children().trigger('edit');
+
+                App.Utils.UI.initializeTimePicker($tr.find('.break-start input, .break-end input'));
+
+                $tr.find('.break-day select').focus();
+
+                // Show save - cancel buttons.
+                $tr.find('.edit-break, .delete-break').addClass('d-none');
+                $tr.find('.save-break, .cancel-break').removeClass('d-none');
+                $tr.find('select,input:text').addClass('form-control form-control-sm');
+            });
+
+            /**
+             * Event: Delete Break Button "Click"
+             *
+             * Removes the current line from the "Breaks" table.
+             *
+             * @param {jQuery.Event} event
+             */
+            $(document).on('click', '.delete-break', (event) => {
+                $(event.currentTarget).closest('tr').remove();
+            });
+
+            /**
+             * Event: Cancel Break Button "Click"
+             *
+             * Bring the ".breaks" table back to its initial state.
+             *
+             * @param {jQuery.Event} event
+             */
+            $(document).on('click', '.cancel-break', (event) => {
+                const element = event.target;
+                const $modifiedRow = $(element).closest('tr');
+                this.enableCancel = true;
+                $modifiedRow.find('.cancel-editable').trigger('click');
+                this.enableCancel = false;
+
+                $modifiedRow.find('.edit-break, .delete-break').removeClass('d-none');
+                $modifiedRow.find('.save-break, .cancel-break').addClass('d-none');
+            });
+
+            /**
+             * Event: Save Break Button "Click"
+             *
+             * Save the editable values and restore the table to its initial state.
+             *
+             * @param {jQuery.Event} event
+             */
+            $(document).on('click', '.save-break', (event) => {
+                const timeFormat = vars('time_format') === 'regular' ? 'h:mm a' : 'HH:mm';
+                // Break's start time must always be prior to break's end.
+                const element = event.target;
+
+                const $modifiedRow = $(element).closest('tr');
+
+                const startMoment = moment($modifiedRow.find('.break-start input').val(), timeFormat);
+
+                const endMoment = moment($modifiedRow.find('.break-end input').val(), timeFormat);
+
+                if (startMoment.isAfter(endMoment)) {
+                    $modifiedRow
+                        .find('.break-end input')
+                        .val(startMoment.add(1, 'hour').format(timeFormat).toLowerCase());
+                }
+
+                this.enableSubmit = true;
+                $modifiedRow.find('.editable .submit-editable').trigger('click');
+                this.enableSubmit = false;
+
+                $modifiedRow.find('.save-break, .cancel-break').addClass('d-none');
+                $modifiedRow.find('.edit-break, .delete-break').removeClass('d-none');
+            });
+
+            /**
+             * Event: Add Working Plan Exception Button "Click"
+             *
+             * A new row is added on the table and the user can enter the new working plan exception.
+             */
+            $(document).on('click', '.add-working-plan-exception', () => {
+                App.Components.WorkingPlanExceptionsModal.add().done((workingPlanException) => {
+                    let $newTr = this.renderWorkingPlanExceptionRow(workingPlanException);
+                    $newTr.appendTo('.working-plan-exceptions tbody');
+                });
+            });
+
+            /**
+             * Event: Edit working plan exception Button "Click"
+             *
+             * Enables the row editing for the "working plan exception" table rows.
+             *
+             * @param {jQuery.Event} event
+             */
+            $(document).on('click', '.edit-working-plan-exception', (event) => {
+                const $tr = $(event.target).closest('tr');
+                const workingPlanException = $tr.data('workingPlanException');
+
+                App.Components.WorkingPlanExceptionsModal.edit(workingPlanException).done(
+                    (updatedWorkingPlanException) => {
+                        $tr.replaceWith(this.renderWorkingPlanExceptionRow(updatedWorkingPlanException));
+                    },
+                );
+            });
+
+            /**
+             * Event: Delete working plan exception Button "Click"
+             *
+             * Removes the current line from the "working plan exceptions" table.
+             *
+             * @param {jQuery.Event} event
+             */
+            $(document).on('click', '.delete-working-plan-exception', (event) => {
+                $(event.currentTarget).closest('tr').remove();
+            });
+        }
+
+        /**
+         * Validate the working plan settings.
+         *
+         * Checks that:
+         * 1. Start time is before end time for each working day
+         * 2. Breaks are within working hours
+         * 3. Break start is before break end
+         *
+         * @return {Object} Returns validation result with isValid flag and errors array.
+         */
+        validate() {
+            const validationResult = {
+                isValid: true,
+                errors: [],
+            };
+
+            const timeFormat = vars('time_format') === 'regular' ? 'h:mm a' : 'HH:mm';
+
+            $('.working-plan input').removeClass('is-invalid');
+
+            $('.working-plan input:checkbox').each((index, checkbox) => {
+                const id = $(checkbox).attr('id');
+
+                if ($(checkbox).prop('checked') === true) {
+                    const dayName = this.convertValueToDay(id);
+                    const $start = $('#' + id + '-start');
+                    const $end = $('#' + id + '-end');
+                    const startMoment = moment($start.val(), timeFormat);
+                    const endMoment = moment($end.val(), timeFormat);
+                    // Check if start time is before end time
+                    let error = null;
+
+                    if (!startMoment.isValid() || !endMoment.isValid()) {
+                        error = {
+                            type: 'invalid_time',
+                            day: dayName,
+                            message: `${dayName}: ${lang('invalid_time')}`,
+                        };
+                    } else if (startMoment.isSameOrAfter(endMoment)) {
+                        error = {
+                            type: 'start_after_end',
+                            day: dayName,
+                            message: `${dayName}: ${lang('start_date_before_end_error')}`,
+                        };
+                    }
+
+                    if (error) {
+                        validationResult.isValid = false;
+                        validationResult.errors.push(error);
+                        $start.addClass('is-invalid');
+                        $end.addClass('is-invalid');
+                    }
+                }
+            });
+
+            return validationResult;
+        }
+        /**
+         * Check if a break is within the working hours of a day.
+         *
+         * @param {Object} breakItem The break object with start and end times in HH:mm format.
+         * @param {Object} workingDay The working day object with start and end times in HH:mm format.
+         *
+         * @return {Boolean} Returns true if the break is within working hours.
+         */
+        isBreakWithinWorkingHours(breakItem, workingDay) {
+            const breakStart = moment(breakItem.start, 'HH:mm');
+            const breakEnd = moment(breakItem.end, 'HH:mm');
+            const dayStart = moment(workingDay.start, 'HH:mm');
+            const dayEnd = moment(workingDay.end, 'HH:mm');
+
+            return breakStart.isSameOrAfter(dayStart) && breakEnd.isSameOrBefore(dayEnd);
+        }
+        /**
+         * Filter breaks to only include those within working hours.
+         *
+         * Also validates that break start is before break end.
+         *
+         * @param {Array} breaks Array of break objects.
+         * @param {Object} workingDay The working day object with start and end times.
+         *
+         * @return {Array} Returns filtered array of valid breaks.
+         */
+        filterValidBreaks(breaks, workingDay) {
+            return breaks.filter((breakItem) => {
+                const breakStart = moment(breakItem.start, 'HH:mm');
+                const breakEnd = moment(breakItem.end, 'HH:mm');
+
+                // Check break start is before break end
+                if (breakStart.isSameOrAfter(breakEnd)) {
+                    return false;
+                }
+
+                // Check break is within working hours
+                return this.isBreakWithinWorkingHours(breakItem, workingDay);
+            });
+        }
+
+        /**
+         * Remove breaks from the DOM that are outside working hours for a specific day.
+         *
+         * @param {String} dayId The day identifier (e.g., 'monday', 'tuesday').
+         * @param {Object} workingDay The working day object with start and end times.
+         */
+        removeInvalidBreaksFromDOM(dayId, workingDay) {
+            const timeFormat = vars('time_format') === 'regular' ? 'h:mm a' : 'HH:mm';
+            const dayStart = moment(workingDay.start, 'HH:mm');
+            const dayEnd = moment(workingDay.end, 'HH:mm');
+
+            $('.breaks tbody tr').each((index, tr) => {
+                const $tr = $(tr);
+                const breakDayText = $tr.find('.break-day').text();
+                const breakDay = this.convertDayToValue(breakDayText);
+                if (breakDay === dayId) {
+                    const breakStartText = $tr.find('.break-start').text();
+                    const breakEndText = $tr.find('.break-end').text();
+                    const breakStart = moment(breakStartText, timeFormat);
+                    const breakEnd = moment(breakEndText, timeFormat);
+                    // Remove if break start >= break end
+                    if (breakStart.isSameOrAfter(breakEnd)) {
+                        $tr.remove();
+                        return;
+                    }
+                    // Remove if break is outside working hours
+                    if (breakStart.isBefore(dayStart) || breakEnd.isAfter(dayEnd)) {
+                        $tr.remove();
+                    }
+                }
+            });
+        }
+        /**
+         * Remove all breaks from the DOM for days that are not working days.
+         */
+        removeBreaksForNonWorkingDays() {
+            const nonWorkingDays = [];
+
+            $('.working-plan input:checkbox').each((index, checkbox) => {
+                const id = $(checkbox).attr('id');
+                if ($(checkbox).prop('checked') !== true) {
+                    nonWorkingDays.push(id);
+                }
+            });
+
+            $('.breaks tbody tr').each((index, tr) => {
+                const $tr = $(tr);
+                const breakDayText = $tr.find('.break-day').text();
+                const breakDay = this.convertDayToValue(breakDayText);
+                if (nonWorkingDays.includes(breakDay)) {
+                    $tr.remove();
+                }
+            });
+        }
+        /**
+         * Clean up all invalid breaks from the DOM.
+         *
+         * Removes breaks that are:
+         * 1. On non-working days
+         * 2. Outside working hours
+         * 3. Have start time >= end time
+         */
+        cleanupInvalidBreaks() {
+            const timeFormat = vars('time_format') === 'regular' ? 'h:mm a' : 'HH:mm';
+
+            // First remove breaks for non-working days
+            this.removeBreaksForNonWorkingDays();
+
+            // Then remove breaks outside working hours for each working day
+            $('.working-plan input:checkbox').each((index, checkbox) => {
+                const id = $(checkbox).attr('id');
+                if ($(checkbox).prop('checked') === true) {
+                    const startVal = $('#' + id + '-start').val();
+                    const endVal = $('#' + id + '-end').val();
+                    const workingDay = {
+                        start: moment(startVal, timeFormat).format('HH:mm'),
+                        end: moment(endVal, timeFormat).format('HH:mm'),
+                    };
+
+                    this.removeInvalidBreaksFromDOM(id, workingDay);
+                }
+            });
+        }
+        /**
+         * Get the working plan settings.
+         *
+         * Validates the working plan and automatically removes invalid breaks before returning.
+         *
+         * @param {Boolean} [autoCleanup=true] If true, automatically removes invalid breaks from DOM.
+         *
+         * @return {Object|null} Returns the working plan settings object, or null if validation fails.
+         */
+        get(autoCleanup = true) {
+            // Validate working hours (start must be before end)
+            const validation = this.validate();
+
+            if (!validation.isValid) {
+                const errorMessages = validation.errors.map((error) => error.message).join('<br>');
+
+                App.Utils.Message.show(lang('working_plan_validation_failed'), errorMessages);
+
+                return null;
+            }
+
+            // Clean up invalid breaks from DOM if auto cleanup is enabled
+
+            if (autoCleanup) {
+                this.cleanupInvalidBreaks();
+            }
+
+            const workingPlan = {};
+            const timeFormat = vars('time_format') === 'regular' ? 'h:mm a' : 'HH:mm';
+
+            $('.working-plan input:checkbox').each((index, checkbox) => {
+                const id = $(checkbox).attr('id');
+
+                if ($(checkbox).prop('checked') === true) {
+                    const workingDay = {
+                        start: moment($('#' + id + '-start').val(), timeFormat).format('HH:mm'),
+                        end: moment($('#' + id + '-end').val(), timeFormat).format('HH:mm'),
+                        breaks: [],
+                    };
+
+                    // Collect breaks for this day
+                    $('.breaks tr').each((index, tr) => {
+                        const day = this.convertDayToValue($(tr).find('.break-day').text());
+                        if (day === id) {
+                            const start = $(tr).find('.break-start').text();
+                            const end = $(tr).find('.break-end').text();
+                            const breakItem = {
+                                start: moment(start, timeFormat).format('HH:mm'),
+                                end: moment(end, timeFormat).format('HH:mm'),
+                            };
+                            workingDay.breaks.push(breakItem);
+                        }
+                    });
+
+                    // Filter out invalid breaks (outside working hours or start >= end)
+                    workingDay.breaks = this.filterValidBreaks(workingDay.breaks, workingDay);
+
+                    // Sort breaks increasingly by hour within day
+                    workingDay.breaks.sort((break1, break2) => {
+                        return break1.start.localeCompare(break2.start);
+                    });
+
+                    workingPlan[id] = workingDay;
+                } else {
+                    workingPlan[id] = null;
+                }
+            });
+            return workingPlan;
+        }
+
+        /**
+         * Get the working plan exceptions settings.
+         *
+         * @return {Array} Returns an array of working plan exception objects.
+         */
+        getWorkingPlanExceptions() {
+            const workingPlanExceptions = [];
+
+            $('.working-plan-exceptions tbody tr').each((index, tr) => {
+                const $tr = $(tr);
+                const workingPlanException = $tr.data('workingPlanException');
+                if (workingPlanException) {
+                    workingPlanExceptions.push(workingPlanException);
+                }
+            });
+
+            return workingPlanExceptions;
+        }
+
+        /**
+         * Enables or disables the timepicker functionality from the working plan input text fields.
+         *
+         * @param {Boolean} [disabled] If true then the timepickers will be disabled.
+         */
+        timepickers(disabled) {
+            disabled = disabled || false;
+
+            if (disabled === false) {
+                App.Utils.UI.initializeTimePicker($('.working-plan input:text'), {
+                    onChange: (selectedDates, dateStr, instance) => {
+                        const startMoment = moment(selectedDates[0]);
+
+                        const $workEnd = $(instance.input).closest('tr').find('.work-end');
+
+                        const endMoment = moment(App.Utils.UI.getDateTimePickerValue($workEnd));
+
+                        if (startMoment > endMoment) {
+                            App.Utils.UI.setDateTimePickerValue($workEnd, startMoment.add(1, 'hour').toDate());
+                        }
+                    },
+                });
+            }
+        }
+
+        /**
+         * Reset the current plan back to the company's default working plan.
+         */
+        reset() {}
+
+        /**
+         * This is necessary for translated days.
+         *
+         * @param {String} value Day value could be like "monday", "tuesday" etc.
+         */
+        convertValueToDay(value) {
+            switch (value) {
+                case 'sunday':
+                    return lang('sunday');
+                case 'monday':
+                    return lang('monday');
+                case 'tuesday':
+                    return lang('tuesday');
+                case 'wednesday':
+                    return lang('wednesday');
+                case 'thursday':
+                    return lang('thursday');
+                case 'friday':
+                    return lang('friday');
+                case 'saturday':
+                    return lang('saturday');
+            }
+        }
+
+        /**
+         * This is necessary for translated days.
+         *
+         * @param {String} day Day value could be like "Monday", "Tuesday" etc.
+         */
+        convertDayToValue(day) {
+            // Day cells are rendered with an upper case first letter, which does not match the translation of
+            // languages that write the week days in lower case (e.g. Latvian).
+            const dayName = String(day).toLowerCase();
+
+            switch (dayName) {
+                case lang('sunday').toLowerCase():
+                    return 'sunday';
+                case lang('monday').toLowerCase():
+                    return 'monday';
+                case lang('tuesday').toLowerCase():
+                    return 'tuesday';
+                case lang('wednesday').toLowerCase():
+                    return 'wednesday';
+                case lang('thursday').toLowerCase():
+                    return 'thursday';
+                case lang('friday').toLowerCase():
+                    return 'friday';
+                case lang('saturday').toLowerCase():
+                    return 'saturday';
+            }
+        }
+    }
+
+    return WorkingPlan;
+})();

@@ -1,0 +1,503 @@
+/* ----------------------------------------------------------------------------
+ * Easy!Appointments - Online Appointment Scheduler
+ *
+ * @package     EasyAppointments
+ * @author      A.Tselegidis <alextselegidis@gmail.com>
+ * @copyright   Copyright (c) Alex Tselegidis
+ * @license     https://opensource.org/licenses/GPL-3.0 - GPLv3
+ * @link        https://easyappointments.org
+ * @since       v1.5.0
+ * ---------------------------------------------------------------------------- */
+
+/**
+ * Calendar sync utility.
+ *
+ * This module implements the functionality of calendar sync.
+ *
+ * Old Name: BackendCalendarSync
+ */
+App.Utils.CalendarSync = (function () {
+    const $selectFilterItem = $('#select-filter-item');
+    const $enableSync = $('#enable-sync');
+    const $disableSync = $('#disable-sync');
+    const $triggerSync = $('#trigger-sync');
+    const $syncButtonGroup = $('#sync-button-group');
+    const $reloadAppointments = $('#reload-appointments');
+    const $syncAlert = $('#sync-alert');
+
+    const FILTER_TYPE_PROVIDER = 'provider';
+    let isSyncing = false;
+
+    /**
+     * Hide the synchronization alert.
+     */
+    function hideSyncAlert() {
+        $syncAlert.prop('hidden', true);
+    }
+
+    /**
+     * Display why the CalDAV synchronization failed and what has to be done about it.
+     *
+     * The status code carries the reason: a "bad request" means the stored connection settings cannot be used as they
+     * are, while anything else means the server did not answer.
+     *
+     * @param {Object} jqXHR
+     */
+    function showSyncAlert(jqXHR) {
+        let hint;
+
+        if (jqXHR.status === 401) {
+            hint = lang('caldav_sync_failed_credentials');
+        } else if (jqXHR.status === 400) {
+            hint = lang('caldav_sync_failed_url');
+        } else {
+            hint = lang('caldav_sync_failed_unreachable');
+        }
+
+        $syncAlert.find('#sync-alert-title').text(lang('caldav_sync_failed'));
+        $syncAlert.find('#sync-alert-hint').text(hint);
+        $syncAlert.find('#sync-alert-details').text((jqXHR.responseJSON && jqXHR.responseJSON.message) || '');
+
+        $syncAlert.prop('hidden', false);
+    }
+
+    function hasSync(type) {
+        const $selectedOption = $selectFilterItem.find('option:selected');
+
+        return Boolean(Number($selectedOption.attr(`${type}-sync`)));
+    }
+
+    function updateSyncButtons() {
+        const $selectedOption = $selectFilterItem.find('option:selected');
+        const type = $selectedOption.attr('type');
+        const isProvider = type === FILTER_TYPE_PROVIDER;
+        const hasGoogleSync = Boolean(Number($selectedOption.attr('google-sync')));
+        const hasCaldavSync = Boolean(Number($selectedOption.attr('caldav-sync')));
+        const hasSync = hasGoogleSync || hasCaldavSync;
+
+        // Check if the logged-in user is a provider viewing their own data
+        const isLoggedInProvider = vars('role_slug') === App.Layouts.Backend.DB_SLUG_PROVIDER;
+        const selectedProviderId = isProvider ? Number($selectedOption.val()) : null;
+        const canManageSync =
+            isProvider &&
+            (!isLoggedInProvider || // Admins and secretaries can manage any provider
+                Number(vars('user_id')) === selectedProviderId); // Providers can only manage their own sync
+
+        $enableSync.prop('hidden', !canManageSync || hasSync);
+        $syncButtonGroup.prop('hidden', !canManageSync || !hasSync);
+    }
+
+    function enableGoogleSync() {
+        // Enable synchronization for selected provider.
+
+        const authUrl = App.Utils.Url.siteUrl('google/oauth/' + $('#select-filter-item').val());
+
+        const windowHandle = window.open(authUrl, 'Easy!Appointments', 'width=800, height=600');
+
+        // Listen for the postMessage that oauth_callback emits after the token is saved server-side.
+        // This avoids the race condition of URL-polling, which fires as soon as the browser starts
+        // navigating to oauth_callback — before the server has finished processing the request.
+        function onOauthMessage(event) {
+            if (event.origin !== window.location.origin || event.data !== 'oauth_success') {
+                return;
+            }
+
+            window.removeEventListener('message', onOauthMessage);
+
+            if (windowHandle && !windowHandle.closed) {
+                windowHandle.close();
+            }
+
+            const $selectedOption = $selectFilterItem.find('option:selected');
+
+            $selectedOption.attr('google-sync', '1');
+
+            updateSyncButtons();
+
+            selectGoogleCalendar();
+        }
+
+        window.addEventListener('message', onOauthMessage);
+    }
+
+    function disableGoogleSync() {
+        App.Utils.Message.show(lang('disable_sync'), lang('disable_sync_prompt'), [
+            {
+                text: lang('cancel'),
+                click: (event, messageModal) => {
+                    messageModal.hide();
+                },
+            },
+            {
+                text: lang('confirm'),
+                click: (event, messageModal) => {
+                    // Disable synchronization for selected provider.
+                    const providerId = $selectFilterItem.val();
+
+                    const provider = vars('available_providers').find(
+                        (availableProvider) => Number(availableProvider.id) === Number(providerId),
+                    );
+
+                    if (!provider) {
+                        throw new Error('Provider not found: ' + providerId);
+                    }
+
+                    provider.settings.google_sync = '0';
+                    provider.settings.google_token = null;
+
+                    App.Http.Google.disableProviderSync(provider.id);
+
+                    const $selectedOption = $selectFilterItem.find('option:selected');
+
+                    $selectedOption.attr('google-sync', '0');
+
+                    updateSyncButtons();
+
+                    messageModal.hide();
+                },
+            },
+        ]);
+    }
+
+    function selectGoogleCalendar() {
+        const providerId = $selectFilterItem.val();
+
+        App.Http.Google.getGoogleCalendars(providerId).done((googleCalendars) => {
+            const $selectGoogleCalendar = $(`
+                <select class="form-select">
+                    <!-- JS -->
+                </select>
+            `);
+
+            googleCalendars.forEach((googleCalendar) => {
+                $selectGoogleCalendar.append(new Option(googleCalendar.summary, googleCalendar.id));
+            });
+
+            const $messageModal = App.Utils.Message.show(
+                lang('select_sync_calendar'),
+                lang('select_sync_calendar_prompt'),
+                [
+                    {
+                        text: lang('select'),
+                        click: (event, messageModal) => {
+                            const googleCalendarId = $selectGoogleCalendar.val();
+
+                            App.Http.Google.selectGoogleCalendar(providerId, googleCalendarId).done(() => {
+                                App.Layouts.Backend.displayNotification(lang('sync_calendar_selected'));
+                            });
+
+                            messageModal.hide();
+                        },
+                    },
+                ],
+            );
+
+            $selectGoogleCalendar.appendTo($messageModal.find('.modal-body'));
+        });
+    }
+
+    function triggerGoogleSync() {
+        const providerId = $selectFilterItem.val();
+
+        App.Http.Google.syncWithGoogle(providerId)
+            .done(() => {
+                App.Layouts.Backend.displayNotification(lang('calendar_sync_completed'));
+                $reloadAppointments.trigger('click');
+            })
+            .fail((jqXHR) => {
+                const serverMessage = jqXHR.responseJSON && jqXHR.responseJSON.message;
+
+                let message = lang('calendar_sync_failed');
+
+                if (jqXHR.status === 401) {
+                    message = lang('invalid_credentials_provided');
+                } else if (serverMessage) {
+                    message += ' ' + serverMessage;
+                }
+
+                App.Layouts.Backend.displayNotification(message);
+            })
+            .always(() => {
+                isSyncing = false;
+            });
+    }
+
+    function enableCaldavSync(defaultCaldavUrl = '', defaultCaldavUsername = '', defaultCaldavPassword = '') {
+        const $container = $(`
+            <div>
+                <div class="mb-3">
+                    <label for="caldav-url" class="form-label">
+                        ${lang('calendar_url')}
+                    </label>
+                    <input type="text" class="form-control" id="caldav-url" value="${defaultCaldavUrl}"/>
+                </div> 
+                <div class="mb-3">
+                    <label for="caldav-username" class="form-label">
+                        ${lang('username')}
+                    </label>
+                    <input type="text" class="form-control" id="caldav-username" value="${defaultCaldavUsername}"/>
+                </div> 
+                <div class="mb-3">
+                    <label for="caldav-password" class="form-label">
+                        ${lang('password')}
+                    </label>
+                    <input type="password" class="form-control" id="caldav-password" value="${defaultCaldavPassword}"/>
+                </div>    
+                
+                <div class="alert alert-danger" hidden>
+                    <!-- JS -->
+                </div>
+
+                <div class="alert alert-warning" id="caldav-private-host" hidden>
+                    <p class="mb-2">
+                        ${lang('caldav_private_host_warning')}
+                    </p>
+                    <code class="d-block mb-2" id="caldav-private-host-name"></code>
+                    <button type="button" class="btn btn-sm btn-outline-warning" id="caldav-allow-host">
+                        ${lang('caldav_allow_host_and_connect')}
+                    </button>
+                </div>
+            </div>
+        `);
+
+        /**
+         * Send the connection information to the server.
+         *
+         * @param {Boolean} allowPrivateHost Confirms a host that sits on a private network.
+         */
+        function connect(allowPrivateHost) {
+            const providerId = $selectFilterItem.val();
+
+            $messageModal.find('.is-invalid').removeClass('is-invalid');
+
+            const $alert = $messageModal.find('.alert-danger');
+            $alert.text('').prop('hidden', true);
+
+            const $privateHost = $container.find('#caldav-private-host');
+            $privateHost.prop('hidden', true);
+
+            const $caldavUrl = $container.find('#caldav-url');
+            const caldavUrl = $caldavUrl.val();
+
+            if (!caldavUrl) {
+                $caldavUrl.addClass('is-invalid');
+                return;
+            }
+
+            const $caldavUsername = $container.find('#caldav-username');
+            const caldavUsername = $caldavUsername.val();
+
+            if (!caldavUsername) {
+                $caldavUsername.addClass('is-invalid');
+                return;
+            }
+
+            const $caldavPassword = $container.find('#caldav-password');
+            const caldavPassword = $caldavPassword.val();
+
+            if (!caldavPassword) {
+                $caldavPassword.addClass('is-invalid');
+                return;
+            }
+
+            App.Http.Caldav.connectToServer(
+                providerId,
+                caldavUrl,
+                caldavUsername,
+                caldavPassword,
+                allowPrivateHost,
+            ).done((response) => {
+                if (!response.success) {
+                    // The host only failed the private address check, so offer to allow it instead of just
+                    // reporting the failure.
+                    if (response.blocked_host) {
+                        $container.find('#caldav-private-host-name').text(response.blocked_host);
+                        $privateHost.prop('hidden', false);
+                        return;
+                    }
+
+                    $caldavUrl.addClass('is-invalid');
+                    $caldavUsername.addClass('is-invalid');
+                    $caldavPassword.addClass('is-invalid');
+
+                    $alert.text(response.message || lang('login_failed')).prop('hidden', false);
+
+                    return;
+                }
+
+                const $selectedOption = $selectFilterItem.find('option:selected');
+
+                $selectedOption.attr('caldav-sync', '1');
+
+                updateSyncButtons();
+
+                App.Layouts.Backend.displayNotification(lang('sync_calendar_selected'));
+
+                bootstrap.Modal.getInstance($messageModal[0])?.hide();
+            });
+        }
+
+        const $messageModal = App.Utils.Message.show(lang('caldav_server'), lang('caldav_connection_info_prompt'), [
+            {
+                text: lang('cancel'),
+                click: (event, messageModal) => {
+                    messageModal.hide();
+                },
+            },
+            {
+                text: lang('connect'),
+                click: () => {
+                    connect(false);
+                },
+            },
+        ]);
+
+        $messageModal.find('.modal-body').append($container);
+
+        $container.find('#caldav-allow-host').on('click', () => {
+            connect(true);
+        });
+    }
+
+    function disableCaldavSync() {
+        App.Utils.Message.show(lang('disable_sync'), lang('disable_sync_prompt'), [
+            {
+                text: lang('cancel'),
+                click: (event, messageModal) => {
+                    messageModal.hide();
+                },
+            },
+            {
+                text: lang('confirm'),
+                click: (event, messageModal) => {
+                    // Disable synchronization for selected provider.
+                    const providerId = $selectFilterItem.val();
+
+                    const provider = vars('available_providers').find(
+                        (availableProvider) => Number(availableProvider.id) === Number(providerId),
+                    );
+
+                    if (!provider) {
+                        throw new Error('Provider not found: ' + providerId);
+                    }
+
+                    provider.settings.caldav_sync = '0';
+                    provider.settings.caldav_url = null;
+                    provider.settings.caldav_username = null;
+                    provider.settings.caldav_password = null;
+
+                    App.Http.Caldav.disableProviderSync(provider.id);
+
+                    const $selectedOption = $selectFilterItem.find('option:selected');
+
+                    $selectedOption.attr('caldav-sync', '0');
+
+                    updateSyncButtons();
+
+                    messageModal.hide();
+                },
+            },
+        ]);
+    }
+
+    function triggerCaldavSync() {
+        const providerId = $selectFilterItem.val();
+
+        hideSyncAlert();
+
+        App.Http.Caldav.syncWithCaldav(providerId)
+            .done(() => {
+                App.Layouts.Backend.displayNotification(lang('calendar_sync_completed'));
+                $reloadAppointments.trigger('click');
+            })
+            .fail(showSyncAlert)
+            .always(() => {
+                isSyncing = false;
+            });
+    }
+
+    function onSelectFilterItemChange() {
+        updateSyncButtons();
+    }
+
+    function onEnableSyncClick() {
+        const isGoogleSyncFeatureEnabled = vars('google_sync_feature');
+
+        if (!isGoogleSyncFeatureEnabled) {
+            enableCaldavSync();
+            return;
+        }
+
+        App.Utils.Message.show(lang('enable_sync'), lang('sync_method_prompt'), [
+            {
+                text: 'CalDAV Calendar',
+                className: 'btn btn-outline-primary me-auto',
+                click: (event, messageModal) => {
+                    messageModal.hide();
+                    enableCaldavSync();
+                },
+            },
+            {
+                text: 'Google Calendar',
+                click: (event, messageModal) => {
+                    messageModal.hide();
+                    enableGoogleSync();
+                },
+            },
+        ]);
+    }
+
+    function onDisableSyncClick() {
+        const hasGoogleSync = hasSync('google');
+
+        if (hasGoogleSync) {
+            disableGoogleSync();
+            return;
+        }
+
+        const hasCalSync = hasSync('caldav');
+
+        if (hasCalSync) {
+            disableCaldavSync();
+        }
+    }
+
+    function onTriggerSyncClick() {
+        const hasGoogleSync = hasSync('google');
+        isSyncing = true;
+
+        if (hasGoogleSync) {
+            triggerGoogleSync();
+            return;
+        }
+
+        const hasCalSync = hasSync('caldav');
+
+        if (hasCalSync) {
+            triggerCaldavSync();
+        }
+    }
+
+    function isCurrentlySyncing() {
+        return isSyncing;
+    }
+
+    /**
+     * Initialize the module.
+     */
+    function initialize() {
+        $selectFilterItem.on('change', onSelectFilterItemChange);
+        $enableSync.on('click', onEnableSyncClick);
+        $disableSync.on('click', onDisableSyncClick);
+        $triggerSync.on('click', onTriggerSyncClick);
+        $('#sync-alert-close').on('click', hideSyncAlert);
+        updateSyncButtons();
+    }
+
+    document.addEventListener('DOMContentLoaded', initialize);
+
+    return {
+        initialize,
+        isCurrentlySyncing,
+    };
+})();

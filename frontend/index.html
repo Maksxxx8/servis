@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Онлайн-запис | Beauty Studio</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col">
+
+  <!-- ВЕРХНЯ ПАНЕЛЬ АДМІНІСТРАТОРА (Прихована для клієнтів, видима тільки після введення PIN) -->
+  <div id="admin-bar" class="hidden bg-slate-900 text-white px-4 py-2.5 text-sm shadow-md sticky top-0 z-50">
+    <div class="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-2">
+      <div class="flex items-center gap-3">
+        <span class="font-semibold tracking-wide flex items-center gap-1.5">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" id="server-indicator"></span>
+          <span id="server-status-text">Режим Майстра</span>
+        </span>
+        <div class="flex bg-slate-800 rounded-lg p-0.5 text-xs">
+          <button id="tab-client" class="px-3 py-1.5 rounded-md transition">📱 Віджет клієнта</button>
+          <button id="tab-calendar" class="px-3 py-1.5 rounded-md transition bg-indigo-600 text-white font-medium">📅 Шахівниця</button>
+          <button id="tab-settings" class="px-3 py-1.5 rounded-md transition">⚙️ Налаштування та Послуги</button>
+          <button id="tab-clients" class="px-3 py-1.5 rounded-md transition">👥 Клієнти</button>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button data-action="logout" class="text-xs bg-rose-600/20 hover:bg-rose-600 text-rose-200 hover:text-white px-3 py-1.5 rounded-lg transition">🚪 Вийти</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ОСНОВНИЙ КОНТЕЙНЕР -->
+  <main class="flex-1 flex flex-col">
+
+    <!-- ================= 1. КЛІЄНТСЬКИЙ ВІДЖЕТ (У СТИЛІ ALTEGIO) ================= -->
+    <div id="view-client" class="flex-1 flex flex-col items-center justify-start py-4 px-3 sm:py-8">
+      <div class="w-full max-w-md bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden flex flex-col min-h-[620px]">
+        
+        <!-- Шапка салону -->
+        <div class="bg-gradient-to-r from-slate-900 to-indigo-950 text-white p-5 relative">
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-[11px] uppercase tracking-wider text-indigo-300 font-semibold">Онлайн-запис</span>
+              <h1 id="widget-salon-name" class="text-xl font-bold mt-0.5">Beauty Studio</h1>
+              <p id="widget-salon-address" class="text-xs text-slate-300 mt-0.5">м. Дніпро • Щодня 09:00–20:00</p>
+            </div>
+            <div class="w-11 h-11 rounded-2xl bg-white/10 backdrop-blur flex items-center justify-center text-xl font-bold">
+              ✨
+            </div>
+          </div>
+
+          <!-- Індикатор кроків -->
+          <div class="grid grid-cols-4 gap-1.5 mt-5 text-[11px]">
+            <button data-step-nav="1" id="step-btn-1" class="text-left py-1.5 px-2 rounded-lg bg-white/20 font-medium truncate">1. Майстер</button>
+            <button data-step-nav="2" id="step-btn-2" class="text-left py-1.5 px-2 rounded-lg bg-white/5 text-slate-300 truncate">2. Послуги</button>
+            <button data-step-nav="3" id="step-btn-3" class="text-left py-1.5 px-2 rounded-lg bg-white/5 text-slate-300 truncate">3. Час</button>
+            <button data-step-nav="4" id="step-btn-4" class="text-left py-1.5 px-2 rounded-lg bg-white/5 text-slate-300 truncate">4. Запис</button>
+          </div>
+        </div>
+
+        <!-- Контент кроків віджета -->
+        <div class="p-5 flex-1 flex flex-col justify-between">
+          
+          <!-- КРОК 1: ВИБІР МАЙСТРА -->
+          <div id="widget-step-1" class="space-y-3">
+            <h2 class="text-base font-bold text-slate-800">Оберіть спеціаліста</h2>
+            <div id="widget-masters-list" class="space-y-3"></div>
+          </div>
+
+          <!-- КРОК 2: ВИБІР ПОСЛУГ -->
+          <div id="widget-step-2" class="hidden space-y-3 flex-1 flex flex-col">
+            <div class="flex items-center justify-between">
+              <button data-step-nav="1" class="text-xs text-indigo-600 font-medium hover:underline">← Змінити майстра</button>
+              <span id="selected-master-badge" class="text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full font-medium"></span>
+            </div>
+            <h2 class="text-base font-bold text-slate-800">Оберіть послуги</h2>
+            <div id="widget-services-list" class="space-y-2.5 flex-1 overflow-y-auto max-h-[360px] pr-1"></div>
+            
+            <div id="widget-services-footer" class="hidden pt-3 border-t border-slate-100 mt-auto">
+              <div class="flex items-center justify-between text-sm mb-2.5">
+                <span class="text-slate-500">Разом (<span id="widget-total-duration">0</span> хв):</span>
+                <span class="font-bold text-base text-slate-900"><span id="widget-total-price">0</span> ₴</span>
+              </div>
+              <button data-action="to-step-3" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-xl shadow-md transition">
+                Обрати дату та час →
+              </button>
+            </div>
+          </div>
+
+          <!-- КРОК 3: ВИБІР ДАТИ ТА ЧАСУ -->
+          <div id="widget-step-3" class="hidden space-y-4 flex-1 flex flex-col">
+            <div class="flex items-center justify-between">
+              <button data-step-nav="2" class="text-xs text-indigo-600 font-medium hover:underline">← До послуг</button>
+              <span id="step3-summary" class="text-xs text-slate-500"></span>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Дата візиту</label>
+              <input type="date" id="widget-date-picker" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div class="flex-1">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Вільний час</label>
+              <div id="widget-time-slots" class="grid grid-cols-3 gap-2"></div>
+            </div>
+          </div>
+
+          <!-- КРОК 4: КОНТАКТИ КЛІЄНТА ТА ПІДТВЕРДЖЕННЯ -->
+          <div id="widget-step-4" class="hidden space-y-4 flex-1 flex flex-col">
+            <div class="flex items-center justify-between">
+              <button data-step-nav="3" class="text-xs text-indigo-600 font-medium hover:underline">← Змінити час</button>
+            </div>
+            <div class="bg-slate-50 p-3.5 rounded-2xl border border-slate-100 text-xs space-y-1">
+              <div class="font-bold text-slate-800 text-sm" id="confirm-master-name"></div>
+              <div class="text-slate-600" id="confirm-services-list"></div>
+              <div class="flex justify-between pt-2 border-t border-slate-200/70 font-semibold text-slate-900">
+                <span id="confirm-datetime"></span>
+                <span id="confirm-price"></span>
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">Ваше ім'я *</label>
+                <input type="text" id="client-name" placeholder="Наприклад, Анна" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">Телефон *</label>
+                <input type="tel" id="client-phone" placeholder="+380 (__) ___-__-__" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">Коментар до запису (необов'язково)</label>
+                <textarea id="client-comment" rows="2" placeholder="Побажання, зняття старого покриття тощо" class="w-full border border-slate-200 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+              </div>
+            </div>
+
+            <button data-action="submit-booking" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3.5 rounded-xl shadow-lg transition mt-auto">
+              Підтвердити запис
+            </button>
+          </div>
+
+          <!-- КРОК 5: УСПІШНИЙ ЗАПИС -->
+          <div id="widget-step-5" class="hidden text-center py-8 space-y-4 my-auto">
+            <div class="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-3xl mx-auto">✓</div>
+            <h2 class="text-xl font-bold text-slate-800">Ви успішно записані!</h2>
+            <p id="success-details" class="text-sm text-slate-600 max-w-xs mx-auto"></p>
+            <div class="pt-4">
+              <button data-action="reset-widget" class="text-sm text-indigo-600 font-semibold hover:underline">Створити ще один запис</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Непомітна кнопка входу для майстрів -->
+      <div class="mt-6 text-center">
+        <button data-action="open-pin" class="text-xs text-slate-400 hover:text-slate-600 transition flex items-center gap-1 mx-auto">
+          <span>🔒 Вхід для майстрів</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ================= 2. АДМІНКА: ШАХІВНИЦЯ РОЗКЛАДУ ================= -->
+    <div id="view-calendar" class="hidden flex-1 max-w-6xl w-full mx-auto p-4 space-y-4">
+      <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <button data-action="date-prev" class="p-2 rounded-lg border hover:bg-slate-50">←</button>
+          <input type="date" id="admin-date-picker" class="border border-slate-200 rounded-xl px-3 py-1.5 text-sm font-semibold">
+          <button data-action="date-next" class="p-2 rounded-lg border hover:bg-slate-50">→</button>
+          <button data-action="date-today" class="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg font-medium">Сьогодні</button>
+        </div>
+        <div class="flex items-center gap-4 text-xs">
+          <div id="admin-revenue-summary" class="font-semibold text-slate-700"></div>
+          <button data-action="new-booking" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-semibold shadow-sm transition">
+            + Записати клієнта
+          </button>
+        </div>
+      </div>
+
+      <!-- Сітка шахівниці на двох майстрів -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="grid grid-cols-12 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600">
+          <div class="col-span-2 sm:col-span-1 p-3 text-center border-r border-slate-200">Час</div>
+          <div class="col-span-5 sm:col-span-5 p-3 border-r border-slate-200" id="cal-header-m1">Світлана (Брови)</div>
+          <div class="col-span-5 sm:col-span-6 p-3" id="cal-header-m2">Марія (Манікюр)</div>
+        </div>
+        <div id="calendar-grid-body" class="divide-y divide-slate-100 text-xs"></div>
+      </div>
+    </div>
+
+    <!-- ================= 3. АДМІНКА: НАЛАШТУВАННЯ САЛОНУ ТА ПРАЙС-ЛИСТ ================= -->
+    <div id="view-settings" class="hidden flex-1 max-w-4xl w-full mx-auto p-4 space-y-6">
+      
+      <!-- Блок 1: Назва салону, години роботи та PIN -->
+      <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+        <h2 class="text-base font-bold text-slate-800">1. Налаштування салону та безпека</h2>
+        <div class="grid sm:grid-cols-2 gap-4 text-sm">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Назва салону (у шапці віджета)</label>
+            <input type="text" id="set-salon-name" class="w-full border rounded-xl px-3 py-2">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Адреса та орієнтир</label>
+            <input type="text" id="set-salon-address" class="w-full border rounded-xl px-3 py-2">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Початок робочого дня (година, напр. 9)</label>
+            <input type="number" id="set-work-start" min="6" max="15" class="w-full border rounded-xl px-3 py-2">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Кінець робочого дня (година, напр. 20)</label>
+            <input type="number" id="set-work-end" min="15" max="23" class="w-full border rounded-xl px-3 py-2">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">PIN-код входу для майстрів</label>
+            <input type="text" id="set-admin-pin" class="w-full border rounded-xl px-3 py-2 font-mono">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Telegram Bot Token (необов'язково)</label>
+            <input type="text" id="set-tg-token" placeholder="123456:ABC-DEF..." class="w-full border rounded-xl px-3 py-2 font-mono text-xs">
+          </div>
+        </div>
+        <button data-action="save-salon" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition">
+          💾 Зберегти налаштування салону
+        </button>
+      </div>
+
+      <!-- Блок 2: Профілі майстрів -->
+      <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+        <h2 class="text-base font-bold text-slate-800">2. Спеціалісти салону</h2>
+        <div id="settings-masters-list" class="grid sm:grid-cols-2 gap-4"></div>
+        <button data-action="save-masters" class="bg-slate-800 hover:bg-slate-900 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition">
+          💾 Зберегти профілі майстрів
+        </button>
+      </div>
+
+      <!-- Блок 3: Редактор переліку послуг -->
+      <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-base font-bold text-slate-800">3. Перелік послуг та ціни</h2>
+          <button data-action="add-service" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition">
+            + Додати послугу
+          </button>
+        </div>
+        <div id="settings-services-list" class="divide-y divide-slate-100 text-sm"></div>
+      </div>
+
+    </div>
+
+    <!-- ================= 4. АДМІНКА: БАЗА КЛІЄНТІВ ================= -->
+    <div id="view-clients" class="hidden flex-1 max-w-4xl w-full mx-auto p-4 space-y-4">
+      <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+        <h2 class="text-base font-bold text-slate-800">База клієнтів та історія записів</h2>
+        <div id="clients-list-body" class="divide-y divide-slate-100 text-sm"></div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- МОДАЛЬНЕ ВІКНО ВВЕДЕННЯ PIN-КОДУ -->
+  <div id="pin-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-xs w-full p-5 shadow-2xl space-y-4 text-center">
+      <div class="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto text-xl">🔒</div>
+      <h3 class="font-bold text-base">Вхід для майстрів</h3>
+      <p class="text-xs text-slate-500">Введіть PIN-код адміністратора для доступу до шахівниці та налаштувань</p>
+      <input type="password" id="pin-input" placeholder="••••" class="w-full text-center text-xl tracking-widest border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+      <div class="flex gap-2">
+        <button data-action="close-pin" class="flex-1 py-2.5 rounded-xl border text-xs font-semibold">Скасувати</button>
+        <button data-action="verify-pin" class="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold">Увійти</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- МОДАЛЬНЕ ВІКНО РЕДАГУВАННЯ / ДОДАВАННЯ ПОСЛУГИ -->
+  <div id="service-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+      <h3 class="font-bold text-base" id="service-modal-title">Послуга</h3>
+      <input type="hidden" id="edit-service-id">
+      <div class="space-y-3 text-sm">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Майстер</label>
+          <select id="edit-service-master" class="w-full border rounded-xl px-3 py-2"></select>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Назва послуги</label>
+          <input type="text" id="edit-service-title" placeholder="Корекція та фарбування брів" class="w-full border rounded-xl px-3 py-2">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Тривалість (хв)</label>
+            <input type="number" id="edit-service-duration" step="15" value="60" class="w-full border rounded-xl px-3 py-2">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Ціна (₴)</label>
+            <input type="number" id="edit-service-price" step="50" value="500" class="w-full border rounded-xl px-3 py-2">
+          </div>
+        </div>
+      </div>
+      <div class="flex gap-2 pt-2">
+        <button data-action="cancel-service" class="flex-1 py-2.5 rounded-xl border text-xs font-semibold">Скасувати</button>
+        <button data-action="save-service" class="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-semibold">Зберегти</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- МОДАЛЬНЕ ВІКНО КАРТКИ ЗАПИСУ / ДОДАВАННЯ ВРУЧНУ -->
+  <div id="booking-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="font-bold text-base" id="booking-modal-title">Запис клієнта</h3>
+        <button data-action="close-booking" class="text-slate-400 hover:text-slate-600">✕</button>
+      </div>
+      <input type="hidden" id="modal-booking-id">
+      <div class="space-y-3 text-sm">
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Майстер</label>
+            <select id="modal-booking-master" class="w-full border rounded-xl px-3 py-2"></select>
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Статус візиту</label>
+            <select id="modal-booking-status" class="w-full border rounded-xl px-3 py-2">
+              <option value="pending">⏳ Очікування</option>
+              <option value="confirmed">✅ Підтвердив</option>
+              <option value="paid">💚 Прийшов / Оплачено</option>
+              <option value="cancelled">❌ Скасовано</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Дата</label>
+            <input type="date" id="modal-booking-date" class="w-full border rounded-xl px-3 py-2">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Час початку</label>
+            <input type="time" id="modal-booking-time" step="1800" class="w-full border rounded-xl px-3 py-2">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Послуга</label>
+          <select id="modal-booking-service" class="w-full border rounded-xl px-3 py-2"></select>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Ім'я клієнта</label>
+            <input type="text" id="modal-booking-client" class="w-full border rounded-xl px-3 py-2">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Телефон</label>
+            <input type="text" id="modal-booking-phone" class="w-full border rounded-xl px-3 py-2">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Нотатка майстра (формула фарби, база/гель, особливості)</label>
+          <textarea id="modal-booking-notes" rows="2" class="w-full border rounded-xl px-3 py-2" placeholder="Наприклад: фарба графіт + коричневий 1:1..."></textarea>
+        </div>
+      </div>
+      <div class="flex items-center justify-between pt-2 gap-2">
+        <button id="btn-delete-booking" class="hidden py-2.5 px-3 rounded-xl bg-rose-50 text-rose-600 text-xs font-semibold">Видалити</button>
+        <div class="flex gap-2 ml-auto">
+          <button data-action="cancel-booking" class="py-2.5 px-4 rounded-xl border text-xs font-semibold">Скасувати</button>
+          <button data-action="save-booking" class="py-2.5 px-5 rounded-xl bg-indigo-600 text-white text-xs font-semibold">Зберегти</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модульний скрипт додатку -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

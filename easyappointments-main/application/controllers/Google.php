@@ -1,0 +1,695 @@
+<?php defined('BASEPATH') or exit('No direct script access allowed');
+
+/* ----------------------------------------------------------------------------
+ * Easy!Appointments - Online Appointment Scheduler
+ *
+ * @package     EasyAppointments
+ * @author      A.Tselegidis <alextselegidis@gmail.com>
+ * @copyright   Copyright (c) Alex Tselegidis
+ * @license     https://opensource.org/licenses/GPL-3.0 - GPLv3
+ * @link        https://easyappointments.org
+ * @since       v1.0.0
+ * ---------------------------------------------------------------------------- */
+
+use GuzzleHttp\Exception\GuzzleException;
+
+/**
+ * Google controller.
+ *
+ * Handles the Google Calendar synchronization related operations.
+ *
+ * @package Controllers
+ */
+class Google extends EA_Controller
+{
+    /**
+     * Google constructor.
+     */
+    public function __construct()
+    {
+        parent::__construct();
+
+        $this->load->library('google_sync');
+
+        $this->load->model('appointments_model');
+        $this->load->model('providers_model');
+        $this->load->model('roles_model');
+    }
+
+    /**
+     * Complete synchronization of appointments between Google Calendar and Easy!Appointments.
+     *
+     * This method will completely sync the appointments of a provider with his Google Calendar account. The sync period
+     * needs to be relatively small, because a lot of API calls might be necessary and this will lead to consuming the
+     * Google limit for the Calendar API usage.
+     */
+    public static function sync(?string $provider_id = null): void
+    {
+        try {
+            /** @var EA_Controller $CI */
+            $CI = get_instance();
+
+            $CI->load->library('google_sync');
+
+            // Load the libraries as this method is called statically from the CLI command
+
+            $CI->load->model('appointments_model');
+            $CI->load->model('unavailabilities_model');
+            $CI->load->model('providers_model');
+            $CI->load->model('services_model');
+            $CI->load->model('customers_model');
+            $CI->load->model('settings_model');
+
+            $user_id = session('user_id');
+
+            if (!$user_id && !is_cli()) {
+                return;
+            }
+
+            if (!$provider_id) {
+                throw new InvalidArgumentException('No provider ID provided.');
+            }
+
+            $provider = $CI->providers_model->find($provider_id);
+
+            // Check whether the selected provider has the Google Sync enabled.
+            $google_sync = $CI->providers_model->get_setting($provider['id'], 'google_sync');
+
+            if (!$google_sync) {
+                return; // The selected provider does not have the Google Sync enabled.
+            }
+
+            $google_token = json_decode($provider['settings']['google_token'], true);
+
+            $CI->google_sync->refresh_token($google_token['refresh_token']);
+
+            // Fetch provider's appointments that belong to the sync time period.
+            $sync_past_days = $provider['settings']['sync_past_days'];
+
+            $sync_future_days = $provider['settings']['sync_future_days'];
+
+            $start = strtotime('-' . $sync_past_days . ' days', strtotime(date('Y-m-d')));
+
+            $end = strtotime('+' . $sync_future_days . ' days', strtotime(date('Y-m-d')));
+
+            $where = [
+                'start_datetime >=' => date('Y-m-d H:i:s', $start),
+                'end_datetime <=' => date('Y-m-d H:i:s', $end),
+                'id_users_provider' => $provider['id'],
+            ];
+
+            $appointments = $CI->appointments_model->get($where);
+
+            $unavailabilities = $CI->unavailabilities_model->get($where);
+
+            $local_events = [...$appointments, ...$unavailabilities];
+
+            $company_color = setting('company_color');
+
+            $settings = [
+                'company_name' => setting('company_name'),
+                'company_link' => setting('company_link'),
+                'company_email' => setting('company_email'),
+                'company_color' =>
+                    !empty($company_color) && $company_color != DEFAULT_COMPANY_COLOR ? $company_color : null,
+            ];
+
+            $provider_timezone = new DateTimeZone($provider['timezone']);
+
+            // Pre-fetch Google events in the sync window so we can detect duplicates and
+            // re-link local records to existing Google events when the user disables and
+            // re-enables synchronization on the same calendar. Without this, every local
+            // event would be pushed again and produce visible duplicates.
+            try {
+                $existing_google_events = $CI->google_sync->get_sync_events(
+                    $provider['settings']['google_calendar'],
+                    $start,
+                    $end,
+                );
+            } catch (Throwable) {
+                $existing_google_events = null;
+            }
+
+            $extract_google_event_range = function ($google_event) use ($provider_timezone): ?array {
+                if ($google_event->getStart() === null || $google_event->getEnd() === null) {
+                    return null;
+                }
+
+                $is_all_day = $google_event->getStart()->getDateTime() === null;
+
+                if ($is_all_day) {
+                    $g_start = new DateTime($google_event->getStart()->getDate() . ' 00:00:00', $provider_timezone);
+                    $g_end = new DateTime($google_event->getEnd()->getDate() . ' 00:00:00', $provider_timezone);
+                    $g_end->modify('-1 minute');
+                } else {
+                    $g_start = new DateTime($google_event->getStart()->getDateTime());
+                    $g_start->setTimezone($provider_timezone);
+                    $g_end = new DateTime($google_event->getEnd()->getDateTime());
+                    $g_end->setTimezone($provider_timezone);
+                }
+
+                return [$g_start->getTimestamp(), $g_end->getTimestamp()];
+            };
+
+            // Sync each appointment with Google Calendar by following the project's sync protocol (see documentation).
+            foreach ($local_events as $local_event) {
+                if (!$local_event['is_unavailability']) {
+                    $service = $CI->services_model->find($local_event['id_services']);
+                    $customer = $CI->customers_model->find($local_event['id_users_customer']);
+                    $events_model = $CI->appointments_model;
+                } else {
+                    $service = null;
+                    $customer = null;
+                    $events_model = $CI->unavailabilities_model;
+                }
+
+                // If current appointment not synced yet, add to Google Calendar.
+                if (!$local_event['id_google_calendar']) {
+                    // Before creating a new Google event, try to match an existing one in the
+                    // calendar by start/end (and, for unavailabilities, the synthetic
+                    // "Unavailable" summary). When the user disables and re-enables sync on
+                    // the same calendar, the local id_google_calendar is wiped but the events
+                    // still exist remotely, and re-pushing them would create duplicates.
+                    $matched_google_event = null;
+
+                    if ($existing_google_events !== null) {
+                        $local_start_ts = (new DateTime(
+                            $local_event['start_datetime'],
+                            $provider_timezone,
+                        ))->getTimestamp();
+                        $local_end_ts = (new DateTime(
+                            $local_event['end_datetime'],
+                            $provider_timezone,
+                        ))->getTimestamp();
+
+                        foreach ($existing_google_events->getItems() as $candidate) {
+                            if ($candidate->getStatus() === 'cancelled') {
+                                continue;
+                            }
+
+                            $candidate_range = $extract_google_event_range($candidate);
+
+                            if ($candidate_range === null) {
+                                continue;
+                            }
+
+                            if ($candidate_range[0] !== $local_start_ts || $candidate_range[1] !== $local_end_ts) {
+                                continue;
+                            }
+
+                            // For unavailabilities require the synthetic "Unavailable" summary
+                            // to avoid hijacking unrelated Google events that just happen to
+                            // overlap the same time window.
+                            if ($local_event['is_unavailability']) {
+                                $candidate_summary = trim((string) $candidate->getSummary());
+
+                                if (strcasecmp($candidate_summary, 'Unavailable') !== 0) {
+                                    continue;
+                                }
+                            }
+
+                            $matched_google_event = $candidate;
+                            break;
+                        }
+                    }
+
+                    if ($matched_google_event !== null) {
+                        $local_event = $events_model->find($local_event['id']);
+                        $local_event['id_google_calendar'] = $matched_google_event->getId();
+                        $events_model->save($local_event);
+                        continue;
+                    }
+
+                    if (!$local_event['is_unavailability']) {
+                        $google_event = $CI->google_sync->add_appointment(
+                            $local_event,
+                            $provider,
+                            $service,
+                            $customer,
+                            $settings,
+                        );
+                    } else {
+                        $google_event = $CI->google_sync->add_unavailability($provider, $local_event);
+                    }
+
+                    $local_event = $events_model->find($local_event['id']);
+
+                    $local_event['id_google_calendar'] = $google_event->getId();
+
+                    $events_model->save($local_event); // Save the Google Calendar ID.
+
+                    continue;
+                }
+
+                // Appointment is synced with Google Calendar.
+
+                try {
+                    $google_event = $CI->google_sync->get_event($provider, $local_event['id_google_calendar']);
+
+                    if ($google_event->getStatus() == 'cancelled') {
+                        throw new Exception('Event is cancelled, remove the record from Easy!Appointments.');
+                    }
+
+                    // Honour the Google Calendar "Free" (transparent) flag. Scoped to unavailabilities on purpose:
+                    // a real appointment must never be deleted because someone flipped it to Free in their phone.
+                    if (
+                        $local_event['is_unavailability'] &&
+                        strcasecmp((string) $google_event->getTransparency(), 'transparent') === 0
+                    ) {
+                        throw new Exception('Event is marked free in Google Calendar, remove the record.');
+                    }
+
+                    // If Google Calendar event is different from Easy!Appointments appointment then update Easy!Appointments record.
+                    // Both sides must be evaluated in the provider's timezone to get consistent timestamps.
+                    // Local datetimes are stored as timezone-naive strings in the provider's timezone, so
+                    // wrap them with the provider timezone before calling getTimestamp().
+                    $local_event_start = (new DateTime(
+                        $local_event['start_datetime'],
+                        $provider_timezone,
+                    ))->getTimestamp();
+                    $local_event_end = (new DateTime($local_event['end_datetime'], $provider_timezone))->getTimestamp();
+
+                    $is_google_all_day = $google_event->getStart()->getDateTime() === null;
+
+                    if ($is_google_all_day) {
+                        // All-day events carry only a date string (no time, no timezone offset).
+                        // Interpret them as midnight in the provider's timezone so the stored
+                        // datetimes stay consistent and is_all_day_event() keeps returning true.
+                        $google_event_start = new DateTime(
+                            $google_event->getStart()->getDate() . ' 00:00:00',
+                            $provider_timezone,
+                        );
+                        $google_event_end = new DateTime(
+                            $google_event->getEnd()->getDate() . ' 00:00:00',
+                            $provider_timezone,
+                        );
+                        $google_event_end->modify('-1 minute'); // Exclusive end → 23:59:00 of the last actual day
+                    } else {
+                        // Timed events carry RFC3339 strings with an embedded timezone offset.
+                        // Create without a timezone so the offset in the string is honoured, then
+                        // convert to the provider's timezone for local storage.
+                        $google_event_start = new DateTime($google_event->getStart()->getDateTime());
+                        $google_event_start->setTimezone($provider_timezone);
+                        $google_event_end = new DateTime($google_event->getEnd()->getDateTime());
+                        $google_event_end->setTimezone($provider_timezone);
+                    }
+
+                    if ($local_event['is_unavailability']) {
+                        $google_event_summary = $google_event->getSummary();
+                        // Skip the synthetic "Unavailable" summary that EA itself sets when
+                        // pushing unavailabilities to Google so it doesn't get duplicated
+                        // back into the local notes/description.
+                        $google_event_notes =
+                            strcasecmp(trim((string) $google_event_summary), 'Unavailable') === 0
+                                ? (string) $google_event->getDescription()
+                                : trim($google_event_summary . ' ' . $google_event->getDescription());
+                    } else {
+                        $google_event_notes = $google_event->getDescription();
+                    }
+
+                    $is_different =
+                        $local_event_start !== $google_event_start->getTimestamp() ||
+                        $local_event_end !== $google_event_end->getTimestamp() ||
+                        $local_event['notes'] !== $google_event_notes;
+
+                    if ($is_different) {
+                        $local_event['start_datetime'] = $google_event_start->format('Y-m-d H:i:s');
+                        $local_event['end_datetime'] = $google_event_end->format('Y-m-d H:i:s');
+                        $local_event['notes'] = $google_event_notes;
+                        $events_model->save($local_event);
+                    }
+                } catch (GuzzleException $e) {
+                    // Connectivity errors must propagate up so the user is notified - otherwise we would silently
+                    // delete local events while the Google API is only unreachable.
+                    throw $e;
+                } catch (Google\Service\Exception $e) {
+                    // Only a missing event ("not found" / "deleted") means the record is gone on the Google side.
+                    // Every other API error (401 invalid credentials, 403 quota, 5xx) must propagate, otherwise a
+                    // temporary failure would remove the local appointments of the whole sync period.
+                    if (!in_array($e->getCode(), [404, 410], true)) {
+                        throw $e;
+                    }
+
+                    $events_model->delete($local_event['id']);
+
+                    $local_event['id_google_calendar'] = null;
+                } catch (Throwable) {
+                    // Appointment not found on Google Calendar, delete from Easy!Appointments.
+                    $events_model->delete($local_event['id']);
+
+                    $local_event['id_google_calendar'] = null;
+                }
+            }
+
+            // Add Google Calendar events that do not exist in Easy!Appointments.
+            $google_calendar = $provider['settings']['google_calendar'];
+
+            try {
+                $google_events = $CI->google_sync->get_sync_events($google_calendar, $start, $end);
+            } catch (Throwable $e) {
+                if ($e->getCode() === 404) {
+                    log_message('error', 'Google - Remote Calendar not found for provider ID: ' . $provider_id);
+
+                    return; // The remote calendar was not found.
+                } else {
+                    throw $e;
+                }
+            }
+
+            foreach ($google_events->getItems() as $google_event) {
+                if ($google_event->getStatus() === 'cancelled') {
+                    continue;
+                }
+
+                // Honour the Google Calendar "Free" (transparent) flag. Google defaults all-day events and
+                // birthdays to Free, and those must stay bookable.
+                if (strcasecmp((string) $google_event->getTransparency(), 'transparent') === 0) {
+                    continue;
+                }
+
+                if ($google_event->getStart() === null || $google_event->getEnd() === null) {
+                    continue;
+                }
+
+                $is_google_all_day = $google_event->getStart()->getDateTime() === null;
+
+                if ($is_google_all_day) {
+                    // All-day event: map to 00:00:00 → 23:59:00 of the actual day(s).
+                    // Google's end date is exclusive (e.g. a single all-day on the 27th has end.date = '28th').
+                    $google_event_start = new DateTime(
+                        $google_event->getStart()->getDate() . ' 00:00:00',
+                        $provider_timezone,
+                    );
+                    $google_event_end = new DateTime(
+                        $google_event->getEnd()->getDate() . ' 00:00:00',
+                        $provider_timezone,
+                    );
+                    $google_event_end->modify('-1 minute'); // Exclusive end → 23:59:00 of last actual day
+                } else {
+                    if ($google_event->getStart()->getDateTime() === $google_event->getEnd()->getDateTime()) {
+                        continue; // Zero-duration timed event, skip
+                    }
+
+                    $google_event_start = new DateTime($google_event->getStart()->getDateTime());
+                    $google_event_start->setTimezone($provider_timezone);
+                    $google_event_end = new DateTime($google_event->getEnd()->getDateTime());
+                    $google_event_end->setTimezone($provider_timezone);
+                }
+
+                $appointment_results = $CI->appointments_model->get([
+                    'id_google_calendar' => $google_event->getId(),
+                    'id_users_provider' => $provider_id,
+                ]);
+
+                if (!empty($appointment_results)) {
+                    continue;
+                }
+
+                $unavailability_results = $CI->unavailabilities_model->get([
+                    'id_google_calendar' => $google_event->getId(),
+                    'id_users_provider' => $provider_id,
+                ]);
+
+                if (!empty($unavailability_results)) {
+                    continue;
+                }
+
+                // Skip the synthetic "Unavailable" summary that EA itself sets when
+                // pushing unavailabilities to Google so it doesn't get duplicated into
+                // the local notes/description.
+                $google_event_summary = $google_event->getSummary();
+                $google_event_notes =
+                    strcasecmp(trim((string) $google_event_summary), 'Unavailable') === 0
+                        ? (string) $google_event->getDescription()
+                        : trim($google_event_summary . ' ' . $google_event->getDescription());
+
+                // Record doesn't exist in the Easy!Appointments, so add the event now.
+                $local_event = [
+                    'start_datetime' => $google_event_start->format('Y-m-d H:i:s'),
+                    'end_datetime' => $google_event_end->format('Y-m-d H:i:s'),
+                    'is_unavailability' => true,
+                    'location' => $google_event->getLocation(),
+                    'notes' => $google_event_notes,
+                    'id_users_provider' => $provider_id,
+                    'id_google_calendar' => $google_event->getId(),
+                    'id_users_customer' => null,
+                    'id_services' => null,
+                ];
+
+                $CI->unavailabilities_model->save($local_event);
+            }
+
+            json_response([
+                'success' => true,
+            ]);
+        } catch (Throwable $e) {
+            log_message(
+                'error',
+                'Google - Sync completed with an error (provider ID "' . $provider_id . '"): ' . $e->getMessage(),
+            );
+
+            if ($e->getCode() === 401) {
+                json_response(
+                    [
+                        'success' => false,
+                        'message' => lang('invalid_credentials_provided'),
+                    ],
+                    401,
+                );
+
+                return;
+            }
+
+            json_exception($e);
+        }
+    }
+
+    /**
+     * Authorize Google Calendar API usage for a specific provider.
+     *
+     * Since it is required to follow the web application flow, in order to retrieve a refresh token from the Google API
+     * service, this method is going to authorize the given provider.
+     *
+     * @param string $provider_id The provider id, for whom the sync authorization is made.
+     */
+    public function oauth(string $provider_id): void
+    {
+        $user_id = session('user_id');
+
+        if (!$user_id) {
+            show_error('Forbidden', 403);
+        }
+
+        // Validate provider_id is a positive integer
+        $provider_id = filter_var($provider_id, FILTER_VALIDATE_INT);
+        if ($provider_id === false || $provider_id <= 0) {
+            show_error('Invalid provider ID', 400);
+        }
+
+        if (cannot('edit', PRIV_USERS) && !is_current_provider($provider_id)) {
+            show_error('Forbidden', 403);
+        }
+
+        // Generate and store OAuth state parameter to prevent CSRF
+        $oauth_state = bin2hex(random_bytes(32));
+
+        // Store the provider id and state for use on the callback function.
+        session([
+            'oauth_provider_id' => $provider_id,
+            'oauth_state' => $oauth_state,
+        ]);
+
+        // Redirect browser to google user content page.
+        header('Location: ' . $this->google_sync->get_auth_url($oauth_state));
+    }
+
+    /**
+     * Callback method for the Google Calendar API authorization process.
+     *
+     * Once the user grants consent with his Google Calendar data usage, the Google OAuth service will redirect him back
+     * in this page. Here we are going to store the refresh token, because this is what will be used to generate access
+     * tokens in the future.
+     *
+     * IMPORTANT: Because it is necessary to authorize the application using the web server flow (see official
+     * documentation of OAuth), every Easy!Appointments installation should use its own calendar api key. So in every
+     * api console account, the "http://path-to-Easy!Appointments/google/oauth_callback" should be included in an
+     * allowed redirect URL.
+     *
+     * @throws Exception
+     */
+    public function oauth_callback(): void
+    {
+        if (!session('user_id')) {
+            abort(403, 'Forbidden');
+        }
+
+        // Verify OAuth state to prevent CSRF attacks. If state is absent (e.g. a stale redirect
+        // from before CSRF protection was added) or mismatched, abort gracefully.
+        $returned_state = request('state');
+        $stored_state = session('oauth_state');
+
+        if (empty($returned_state) || empty($stored_state) || !hash_equals($stored_state, $returned_state)) {
+            session(['oauth_state' => null]);
+            show_error('Security validation failed. Please try the Google Calendar sync again.', 403);
+
+            return;
+        }
+
+        // Clear the state after verification
+        session(['oauth_state' => null]);
+
+        $code = request('code');
+
+        if (empty($code)) {
+            response('Code authorization failed.');
+
+            return;
+        }
+
+        $token = $this->google_sync->authenticate($code);
+
+        if (empty($token)) {
+            response('Token authorization failed.');
+
+            return;
+        }
+
+        // Store the token into the database for future reference.
+        $oauth_provider_id = filter_var(session('oauth_provider_id'), FILTER_VALIDATE_INT);
+
+        if ($oauth_provider_id && $oauth_provider_id > 0) {
+            if (cannot('edit', PRIV_USERS) && !is_current_provider($oauth_provider_id)) {
+                show_error('Forbidden', 403);
+
+                return;
+            }
+
+            $this->providers_model->set_setting($oauth_provider_id, 'google_sync', true);
+            $this->providers_model->set_setting($oauth_provider_id, 'google_token', json_encode($token));
+            $this->providers_model->set_setting($oauth_provider_id, 'google_calendar', 'primary');
+            session(['oauth_provider_id' => null]);
+
+            // Notify the opener that OAuth completed successfully, then close this popup. Using
+            // postMessage ensures the parent only reacts AFTER the server has saved the token,
+            // avoiding the race condition that arises when polling window.document.URL.
+            echo '<script>window.opener && window.opener.postMessage("oauth_success", window.location.origin); window.close();</script>';
+        } else {
+            response('Sync provider id not specified.');
+        }
+    }
+
+    /**
+     * This method will return a list of the available Google Calendars.
+     *
+     * The user will need to select a specific calendar from this list to sync his appointments with. Google access must
+     * be already granted for the specific provider.
+     */
+    public function get_google_calendars(): void
+    {
+        try {
+            method('post');
+
+            check('provider_id', 'numeric');
+
+            $provider_id = (int) request('provider_id');
+
+            if (empty($provider_id)) {
+                throw new Exception('Provider id is required in order to fetch the google calendars.');
+            }
+
+            if (cannot('edit', PRIV_USERS) && !is_current_provider($provider_id)) {
+                throw new RuntimeException('You do not have the required permissions for this task.');
+            }
+
+            // Check if selected provider has sync enabled.
+            $google_sync = $this->providers_model->get_setting($provider_id, 'google_sync');
+
+            if (!$google_sync) {
+                json_response([
+                    'success' => false,
+                ]);
+
+                return;
+            }
+
+            $google_token = json_decode($this->providers_model->get_setting($provider_id, 'google_token'), true);
+
+            $this->google_sync->refresh_token($google_token['refresh_token']);
+
+            $calendars = $this->google_sync->get_google_calendars();
+
+            json_response($calendars);
+        } catch (Throwable $e) {
+            json_exception($e);
+        }
+    }
+
+    /**
+     * Select a specific google calendar for a provider.
+     *
+     * All the appointments will be synced with this particular calendar.
+     */
+    public function select_google_calendar(): void
+    {
+        try {
+            method('post');
+
+            check('provider_id', 'numeric');
+            check('calendar_id', 'string');
+
+            $provider_id = request('provider_id');
+
+            if (cannot('edit', PRIV_USERS) && !is_current_provider($provider_id)) {
+                throw new RuntimeException('You do not have the required permissions for this task.');
+            }
+
+            $calendar_id = request('calendar_id');
+
+            $this->providers_model->set_setting($provider_id, 'google_calendar', $calendar_id);
+
+            json_response([
+                'success' => true,
+            ]);
+        } catch (Throwable $e) {
+            json_exception($e);
+        }
+    }
+
+    /**
+     * Disable a providers sync setting.
+     *
+     * This method deletes the "google_sync" and "google_token" settings from the database.
+     *
+     * After that the provider's appointments will be no longer synced with Google Calendar.
+     */
+    public function disable_provider_sync(): void
+    {
+        try {
+            method('post');
+
+            check('provider_id', 'numeric');
+
+            $provider_id = request('provider_id');
+
+            if (!$provider_id) {
+                throw new Exception('Provider id not specified.');
+            }
+
+            if (cannot('edit', PRIV_USERS) && !is_current_provider($provider_id)) {
+                throw new RuntimeException('You do not have the required permissions for this task.');
+            }
+
+            $this->providers_model->set_setting($provider_id, 'google_sync', false);
+
+            $this->providers_model->set_setting($provider_id, 'google_token');
+
+            $this->appointments_model->clear_google_sync_ids($provider_id);
+
+            json_response([
+                'success' => true,
+            ]);
+        } catch (Throwable $e) {
+            json_exception($e);
+        }
+    }
+}
