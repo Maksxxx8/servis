@@ -2,7 +2,9 @@
  * config.js — Дефолтна база даних (конфігурація салону, спеціалісти, графіки, послуги, записи)
  */
 
-const todayStr = new Date().toISOString().split('T')[0];
+import { formatLocalDate } from './utils/time.js';
+
+export const todayStr = formatLocalDate(new Date());
 
 export const defaultDB = {
   salon: {

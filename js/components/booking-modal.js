@@ -18,7 +18,7 @@ export function populateModalServices() {
   const mId = $('modal-booking-master').value;
   const srvs = state.db.services.filter(s => s.masterId === mId);
   $('modal-booking-service').innerHTML = srvs
-    .map(s => `<option value="${s.id}" data-buffer="${s.bufferTime || 15}" data-duration="${s.duration}">${s.title} (${s.price} ₴, ⏱ ${s.duration} хв + ⌛ ${s.bufferTime || 15} хв буфер)</option>`)
+    .map(s => `<option value="${s.id}" data-buffer="${s.bufferTime || 15}" data-duration="${s.duration}">${s.title} (${s.price} ₴, ⏱ ${s.duration} хв )</option>`)
     .join('');
   updateModalCalculations();
 }

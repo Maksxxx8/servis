@@ -27,14 +27,15 @@ export function closePinModal() {
  */
 export function verifyPin() {
   const entered = $('pin-input').value.trim();
-  if (entered === String(state.db.salon.adminPin || '1234')) {
+  const validPin = String(state.db?.salon?.adminPin || '1234');
+  if (entered === validPin) {
     state.isAdmin = true;
     sessionStorage.setItem('salon_admin_auth', '1');
     closePinModal();
     showAdminBar();
     switchView('calendar');
   } else {
-    alert('Невірний PIN-код');
+    alert('Невірний PIN-код! Перевірте правильність введеного коду.');
   }
 }
 

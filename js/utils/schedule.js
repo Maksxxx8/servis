@@ -7,7 +7,7 @@
  * 3. bookings & timeBlocks & bufferTime (зайняті інтервали)
  */
 
-import { timeToMin, minToTime } from './time.js';
+import { timeToMin, minToTime, formatLocalDate, parseLocalDate, addDays } from './time.js';
 import { todayStr } from '../config.js';
 
 /**
@@ -62,7 +62,7 @@ export function getMasterDaySchedule(master, dateStr) {
   return {
     isWorking: false,
     type: 'day_off',
-    reason: 'Вихідний день за шаблоном тижня',
+    reason: 'Вихідний день',
     workStart: null,
     workEnd: null,
     regularBreaks: []
@@ -208,13 +208,11 @@ export function calculateAvailableSlots(master, services, dateStr, db) {
  */
 export function findNextAvailableDays(master, services, fromDateStr, db, maxDays = 3) {
   const result = [];
-  const base = new Date(fromDateStr + 'T00:00:00');
   const dayNames = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
   for (let i = 1; i <= 21; i++) {
-    const checkDate = new Date(base);
-    checkDate.setDate(checkDate.getDate() + i);
-    const dateStr = checkDate.toISOString().split('T')[0];
+    const dateStr = addDays(fromDateStr, i);
+    const checkDate = parseLocalDate(dateStr);
 
     const calc = calculateAvailableSlots(master, services, dateStr, db);
     if (calc.isWorking && calc.slots.length > 0) {

@@ -176,6 +176,7 @@ export function renderScheduleCabinet() {
             <option value="15" ${slotStep == 15 ? 'selected' : ''}>Кожні 15 хвилин (напр. 10:00, 10:15, 10:30)</option>
             <option value="30" ${slotStep == 30 ? 'selected' : ''}>Кожні 30 хвилин (напр. 10:00, 10:30, 11:00)</option>
             <option value="60" ${slotStep == 60 ? 'selected' : ''}>Кожну 1 годину (напр. 10:00, 11:00, 12:00)</option>
+            <option value="90" ${slotStep == 90 ? 'selected' : ''}>Кожні 1 год 30 хв (напр. 10:00, 11:30, 13:00)</option>
           </select>
           <p class="text-[11px] text-slate-400 mt-1">Крок, з яким клієнт бачить вільні варіанти запису.</p>
         </div>

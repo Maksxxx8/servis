@@ -7,7 +7,7 @@
 
 import state from '../state.js';
 import { $, show, hide } from '../utils/dom.js';
-import { timeToMin, minToTime } from '../utils/time.js';
+import { timeToMin, minToTime, parseLocalDate, formatLocalDate, addDays, addMonths, formatUADate } from '../utils/time.js';
 import { todayStr } from '../config.js';
 import { openEditBookingModal, openManualBookingModal } from '../components/booking-modal.js';
 import { openSlotActionModal, openDateOverrideModal, openTimeBlockModal } from '../components/schedule-modal.js';
@@ -20,17 +20,14 @@ let currentDateStr = todayStr;
 // =================== НАВІГАЦІЯ ПО ДАТАХ ===================
 
 export function changeAdminDate(delta) {
-  const d = new Date(currentDateStr + 'T00:00:00');
-
   if (calendarMode === 'day') {
-    d.setDate(d.getDate() + delta);
+    currentDateStr = addDays(currentDateStr, delta);
   } else if (calendarMode === 'week') {
-    d.setDate(d.getDate() + (delta * 7));
+    currentDateStr = addDays(currentDateStr, delta * 7);
   } else if (calendarMode === 'month') {
-    d.setMonth(d.getMonth() + delta);
+    currentDateStr = addMonths(currentDateStr, delta);
   }
 
-  currentDateStr = d.toISOString().split('T')[0];
   const picker = $('admin-date-picker');
   if (picker) picker.value = currentDateStr;
 
@@ -57,8 +54,29 @@ export function setCalendarMode(mode) {
   renderAdminCalendar();
 }
 
+export function populateCalMasterFilter() {
+  const filterSelect = $('cal-master-filter');
+  if (!filterSelect) return;
+  const currentVal = filterSelect.value || masterFilter;
+  filterSelect.innerHTML = `
+    <option value="all">👥 Всі майстри</option>
+    ${state.db.masters.map(m => `<option value="${m.id}">${m.avatar || '✨'} ${m.name}</option>`).join('')}
+  `;
+  if (['all', ...state.db.masters.map(m => m.id)].includes(currentVal)) {
+    filterSelect.value = currentVal;
+    masterFilter = currentVal;
+  } else {
+    filterSelect.value = 'all';
+    masterFilter = 'all';
+  }
+}
+
 export function setMasterFilter(mId) {
   masterFilter = mId;
+  const filterSelect = $('cal-master-filter');
+  if (filterSelect && filterSelect.value !== mId) {
+    filterSelect.value = mId;
+  }
   renderAdminCalendar();
 }
 
@@ -67,18 +85,27 @@ export function setMasterFilter(mId) {
 export function renderAdminCalendar() {
   const picker = $('admin-date-picker');
   if (picker && !picker.value) picker.value = currentDateStr;
-  if (picker) currentDateStr = picker.value;
+  if (picker && picker.value) currentDateStr = picker.value;
+
+  const filterSelect = $('cal-master-filter');
+  if (filterSelect) {
+    if (filterSelect.value && filterSelect.value !== masterFilter) {
+      masterFilter = filterSelect.value;
+    } else if (masterFilter && filterSelect.value !== masterFilter) {
+      filterSelect.value = masterFilter;
+    }
+  }
 
   // Оновлюємо заголовок або поточну дату
   const titleEl = $('admin-cal-period-title');
   if (titleEl) {
     if (calendarMode === 'day') {
-      titleEl.textContent = `День: ${currentDateStr}`;
+      titleEl.textContent = `День: ${formatUADate(currentDateStr)}`;
     } else if (calendarMode === 'week') {
       const { startStr, endStr } = getWeekRange(currentDateStr);
       titleEl.textContent = `Тиждень: ${startStr} — ${endStr}`;
     } else {
-      const d = new Date(currentDateStr + 'T00:00:00');
+      const d = parseLocalDate(currentDateStr);
       const months = ['Січень', 'Лютий', 'Березень', 'Квітень', 'Травень', 'Червень', 'Липень', 'Серпень', 'Вересень', 'Жовтень', 'Листопад', 'Грудень'];
       titleEl.textContent = `${months[d.getMonth()]} ${d.getFullYear()}`;
     }
@@ -101,13 +128,25 @@ export function renderAdminCalendar() {
 
 function updateRevenueSummary() {
   const dayApps = state.db.appointments.filter(a => a.date === currentDateStr && a.status !== 'cancelled');
-  const summaryParts = state.db.masters.map(m => {
+  const mastersToShow = masterFilter === 'all'
+    ? state.db.masters
+    : state.db.masters.filter(m => m.id === masterFilter);
+
+  const summaryParts = mastersToShow.map(m => {
     const sum = dayApps.filter(a => a.masterId === m.id).reduce((s, a) => s + Number(a.price || 0), 0);
     return `${m.name}: ${sum} ₴`;
   });
+
+  const totalSum = dayApps
+    .filter(a => masterFilter === 'all' || a.masterId === masterFilter)
+    .reduce((s, a) => s + Number(a.price || 0), 0);
+
   const revEl = $('admin-revenue-summary');
   if (revEl) {
-    revEl.textContent = `Виручка за день (${currentDateStr}): ${summaryParts.join(' | ')}`;
+    const label = masterFilter === 'all'
+      ? `Виручка за день (${currentDateStr}): ${summaryParts.join(' | ')} (Всього: ${totalSum} ₴)`
+      : `Виручка за день (${currentDateStr}) • ${summaryParts.join('')}`;
+    revEl.textContent = label;
   }
 }
 
@@ -121,7 +160,7 @@ function renderDayView(container) {
   const dayApps = state.db.appointments.filter(a => a.date === currentDateStr);
   const timeBlocks = (state.db.timeBlocks || []).filter(tb => tb.date === currentDateStr);
 
-  const colWidthClass = masters.length === 1 ? 'col-span-11' : (masters.length === 2 ? 'col-span-5 sm:col-span-5' : 'col-span-3');
+  const gridColsStyle = `grid-cols-[64px_repeat(${masters.length},_minmax(0,_1fr))]`;
 
   // Шапка колонок
   const headerCols = masters.map((m, idx) => {
@@ -132,12 +171,12 @@ function renderDayView(container) {
       : `<span class="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-normal ml-1.5">🏖️ Вихідний</span>`;
 
     return `
-      <div class="${colWidthClass} p-3 ${borderR} flex items-center justify-between">
-        <div class="font-bold text-slate-800 flex items-center">
+      <div class="p-3 ${borderR} flex items-center justify-between min-w-0">
+        <div class="font-bold text-slate-800 flex items-center truncate">
           <span>${m.avatar || '👤'} ${m.name}</span>
           ${badge}
         </div>
-        <button type="button" data-day-override-quick="${m.id}|${currentDateStr}" class="text-[11px] text-indigo-600 hover:underline">⚙️ Графік</button>
+        <button type="button" data-day-override-quick="${m.id}|${currentDateStr}" class="text-[11px] text-indigo-600 hover:underline shrink-0 ml-2">⚙️ Графік</button>
       </div>
     `;
   }).join('');
@@ -149,12 +188,12 @@ function renderDayView(container) {
     const cells = masters.map((master, idx) => {
       const borderR = (idx < masters.length - 1) ? 'border-r border-slate-100' : '';
       const cellContent = renderDayMasterCell(master, currentDateStr, t, m, dayApps, timeBlocks);
-      return `<div class="${colWidthClass} p-1.5 ${borderR}">${cellContent}</div>`;
+      return `<div class="p-1.5 ${borderR} min-w-0">${cellContent}</div>`;
     }).join('');
 
     rows.push(`
-      <div class="grid grid-cols-12 min-h-[56px] border-b border-slate-100 last:border-b-0">
-        <div class="col-span-1 p-2 text-center text-slate-400 font-mono text-xs border-r border-slate-100 flex items-center justify-center bg-slate-50/50">${t}</div>
+      <div class="grid ${gridColsStyle} min-h-[56px] border-b border-slate-100 last:border-b-0">
+        <div class="p-2 text-center text-slate-400 font-mono text-xs border-r border-slate-100 flex items-center justify-center bg-slate-50/50">${t}</div>
         ${cells}
       </div>
     `);
@@ -162,8 +201,8 @@ function renderDayView(container) {
 
   container.innerHTML = `
     <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-      <div class="grid grid-cols-12 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600">
-        <div class="col-span-1 p-3 text-center border-r border-slate-200">Час</div>
+      <div class="grid ${gridColsStyle} bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600">
+        <div class="p-3 text-center border-r border-slate-200">Час</div>
         ${headerCols}
       </div>
       <div class="divide-y divide-slate-100 text-xs">
@@ -315,16 +354,16 @@ function bindDayEvents(container) {
 // =================== 2. РЕЖИМ «ТИЖДЕНЬ» ===================
 
 function getWeekRange(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00');
-  const day = d.getDay(); // 0 is Sun
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+  const d = parseLocalDate(dateStr);
+  const day = d.getDay(); // 0 is Sun, 1 is Mon...
+  const diff = d.getDate() - (day === 0 ? 6 : day - 1); // Monday of this week
   const mon = new Date(d.setDate(diff));
 
   const days = [];
   for (let i = 0; i < 7; i++) {
     const cur = new Date(mon);
     cur.setDate(mon.getDate() + i);
-    days.push(cur.toISOString().split('T')[0]);
+    days.push(formatLocalDate(cur));
   }
 
   return {
@@ -336,27 +375,33 @@ function getWeekRange(dateStr) {
 
 function renderWeekView(container) {
   const { days } = getWeekRange(currentDateStr);
-  const master = state.db.masters.find(m => m.id === masterFilter) || state.db.masters[0];
+  const isAll = masterFilter === 'all';
+  const master = isAll ? null : (state.db.masters.find(m => m.id === masterFilter) || state.db.masters[0]);
 
   const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
 
   // Шапка днів тижня
   const headerCols = days.map((dStr, idx) => {
-    const sched = getMasterDaySchedule(master, dStr);
     const isToday = dStr === todayStr;
-    const dayDate = new Date(dStr + 'T00:00:00');
+    const dayDate = parseLocalDate(dStr);
     const dNum = dayDate.getDate();
+
+    let subBadge = '';
+    if (isAll) {
+      const workingCount = state.db.masters.filter(m => getMasterDaySchedule(m, dStr).isWorking).length;
+      subBadge = `<span class="text-[9px] bg-indigo-50 text-indigo-700 px-1 py-0.5 rounded font-medium">Майстрів: ${workingCount}</span>`;
+    } else {
+      const sched = getMasterDaySchedule(master, dStr);
+      subBadge = sched.isWorking
+        ? `<span class="text-[9px] bg-emerald-100 text-emerald-800 px-1 py-0.5 rounded font-medium">${sched.workStart.slice(0,2)}-${sched.workEnd.slice(0,2)}</span>`
+        : `<span class="text-[9px] bg-slate-200 text-slate-600 px-1 py-0.5 rounded font-medium">Вихідний</span>`;
+    }
 
     return `
       <div class="col-span-1 p-2 text-center border-r border-slate-200 last:border-r-0 ${isToday ? 'bg-indigo-50/70' : ''}">
         <div class="text-[11px] text-slate-500 font-semibold">${dayNames[idx]}</div>
         <div class="text-sm font-bold ${isToday ? 'text-indigo-600 font-extrabold' : 'text-slate-800'}">${dNum}</div>
-        <div class="mt-0.5">
-          ${sched.isWorking
-            ? `<span class="text-[9px] bg-emerald-100 text-emerald-800 px-1 py-0.2 rounded font-medium">${sched.workStart.slice(0,2)}-${sched.workEnd.slice(0,2)}</span>`
-            : `<span class="text-[9px] bg-slate-200 text-slate-600 px-1 py-0.2 rounded font-medium">Вихідний</span>`
-          }
-        </div>
+        <div class="mt-0.5">${subBadge}</div>
       </div>
     `;
   }).join('');
@@ -366,31 +411,51 @@ function renderWeekView(container) {
   for (let m = 9 * 60; m < 20 * 60; m += 60) {
     const t = minToTime(m);
     const dayCells = days.map(dStr => {
-      const sched = getMasterDaySchedule(master, dStr);
-      if (!sched.isWorking) {
-        return `<div class="col-span-1 p-1 bg-slate-100/70 border-r border-slate-100 last:border-r-0 flex items-center justify-center text-slate-400 text-[10px]">Вихідний</div>`;
+      if (!isAll) {
+        const sched = getMasterDaySchedule(master, dStr);
+        if (!sched.isWorking) {
+          return `<div class="col-span-1 p-1 bg-slate-100/70 border-r border-slate-100 last:border-r-0 flex items-center justify-center text-slate-400 text-[10px]">Вихідний</div>`;
+        }
       }
 
-      // Шукаємо записи на цю годину
-      const apps = state.db.appointments.filter(a => a.masterId === master.id && a.date === dStr && a.time.startsWith(t.slice(0, 2)));
-      const timeBlocks = (state.db.timeBlocks || []).filter(tb => tb.masterId === master.id && tb.date === dStr && tb.startTime.startsWith(t.slice(0, 2)));
+      // Шукаємо записи на цю годину з урахуванням фільтра майстра
+      const apps = state.db.appointments.filter(a => {
+        if (a.date !== dStr || !a.time.startsWith(t.slice(0, 2)) || a.status === 'cancelled') return false;
+        if (!isAll && a.masterId !== master.id) return false;
+        return true;
+      });
+
+      const timeBlocks = (state.db.timeBlocks || []).filter(tb => {
+        if (tb.date !== dStr || !tb.startTime.startsWith(t.slice(0, 2))) return false;
+        if (!isAll && tb.masterId !== master.id) return false;
+        return true;
+      });
 
       let inner = '';
       if (apps.length > 0) {
-        inner = apps.map(a => `
-          <div data-edit-booking="${a.id}" class="p-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-950 cursor-pointer text-[10px] font-bold truncate">
-            ${a.time} ${a.clientName} (${a.price}₴)
-          </div>
-        `).join('');
+        inner = apps.map(a => {
+          const mObj = state.db.masters.find(x => x.id === a.masterId);
+          const masterPrefix = isAll && mObj ? `${mObj.avatar || '👤'} ` : '';
+          return `
+            <div data-edit-booking="${a.id}" class="p-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-950 cursor-pointer text-[10px] font-bold truncate mb-0.5">
+              ${masterPrefix}${a.time} ${a.clientName} (${a.price}₴)
+            </div>
+          `;
+        }).join('');
       } else if (timeBlocks.length > 0) {
-        inner = timeBlocks.map(tb => `
-          <div class="p-1 rounded-lg bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-semibold truncate">
-            ☕ ${tb.reason}
-          </div>
-        `).join('');
+        inner = timeBlocks.map(tb => {
+          const mObj = state.db.masters.find(x => x.id === tb.masterId);
+          const masterPrefix = isAll && mObj ? `${mObj.name.slice(0,2)}: ` : '';
+          return `
+            <div class="p-1 rounded-lg bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-semibold truncate mb-0.5">
+              ☕ ${masterPrefix}${tb.reason}
+            </div>
+          `;
+        }).join('');
       } else {
+        const defaultMId = isAll ? (state.db.masters[0]?.id || 'm1') : master.id;
         inner = `
-          <button type="button" data-slot-action="${master.id}|${dStr}|${t}" class="w-full h-full min-h-[36px] rounded hover:bg-slate-50 text-transparent hover:text-slate-400 text-xs text-center transition">
+          <button type="button" data-slot-action="${defaultMId}|${dStr}|${t}" class="w-full h-full min-h-[36px] rounded hover:bg-slate-50 text-transparent hover:text-slate-400 text-xs text-center transition">
             +
           </button>
         `;
@@ -407,11 +472,15 @@ function renderWeekView(container) {
     `);
   }
 
+  const titleHeader = isAll
+    ? `Тижневий розклад: <span class="text-indigo-600">Всі майстри</span> (показ записів усіх спеціалістів)`
+    : `Тижневий розклад: <span class="text-indigo-600">${master.name}</span> (${master.role})`;
+
   container.innerHTML = `
     <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
       <div class="p-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs">
-        <div class="font-bold text-slate-700">Тижневий розклад: <span class="text-indigo-600">${master.name}</span> (${master.role})</div>
-        <div class="text-slate-400 text-[11px]">Клік по вільному слоту дозволяє швидко записати клієнта або поставити перерву</div>
+        <div class="font-bold text-slate-700">${titleHeader}</div>
+        <div class="text-slate-400 text-[11px]">Клік по слоту дозволяє записати клієнта або поставити перерву</div>
       </div>
       <div class="grid grid-cols-8 bg-slate-50/80 border-b border-slate-200 text-xs">
         <div class="col-span-1 p-2 text-center border-r border-slate-200 font-bold text-slate-500">Час</div>
@@ -429,12 +498,12 @@ function renderWeekView(container) {
 // =================== 3. РЕЖИМ «МІСЯЦЬ» ===================
 
 function renderMonthView(container) {
-  const d = new Date(currentDateStr + 'T00:00:00');
+  const d = parseLocalDate(currentDateStr);
   const year = d.getFullYear();
   const month = d.getMonth();
 
-  const firstDayOfMonth = new Date(year, month, 1);
-  const lastDayOfMonth = new Date(year, month + 1, 0);
+  const firstDayOfMonth = new Date(year, month, 1, 12, 0, 0);
+  const lastDayOfMonth = new Date(year, month + 1, 0, 12, 0, 0);
 
   // Визначення початкового дня (понеділок)
   let startOffset = firstDayOfMonth.getDay() - 1;
@@ -444,8 +513,8 @@ function renderMonthView(container) {
   const calDays = [];
 
   for (let i = 0; i < totalCells; i++) {
-    const curDate = new Date(year, month, 1 - startOffset + i);
-    calDays.push(curDate.toISOString().split('T')[0]);
+    const curDate = new Date(year, month, 1 - startOffset + i, 12, 0, 0);
+    calDays.push(formatLocalDate(curDate));
   }
 
   const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
@@ -456,16 +525,24 @@ function renderMonthView(container) {
   `).join('');
 
   const gridCells = calDays.map(dateStr => {
-    const cur = new Date(dateStr + 'T00:00:00');
+    const cur = parseLocalDate(dateStr);
     const isCurrentMonth = cur.getMonth() === month;
     const isToday = dateStr === todayStr;
 
-    // Записи на цей день
-    const dayApps = state.db.appointments.filter(a => a.date === dateStr && a.status !== 'cancelled');
+    // Записи на цей день з урахуванням фільтра майстра
+    const dayApps = state.db.appointments.filter(a => {
+      if (a.date !== dateStr || a.status === 'cancelled') return false;
+      if (masterFilter !== 'all' && a.masterId !== masterFilter) return false;
+      return true;
+    });
     const totalRev = dayApps.reduce((s, a) => s + Number(a.price || 0), 0);
 
-    // Індикатори змін майстрів
-    const masterBadges = state.db.masters.map(m => {
+    // Індикатори змін майстрів (тільки обрані майстри)
+    const mastersForBadges = masterFilter === 'all'
+      ? state.db.masters
+      : state.db.masters.filter(m => m.id === masterFilter);
+
+    const masterBadges = mastersForBadges.map(m => {
       const sched = getMasterDaySchedule(m, dateStr);
       if (!sched.isWorking) {
         return `<span class="text-[9px] bg-slate-100 text-slate-500 font-semibold px-1 rounded truncate">${m.name.slice(0, 2)}: Вих</span>`;
@@ -482,7 +559,7 @@ function renderMonthView(container) {
           <span class="text-xs font-bold ${isToday ? 'w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center font-extrabold' : (isCurrentMonth ? 'text-slate-800' : 'text-slate-400')}">
             ${cur.getDate()}
           </span>
-          ${dayApps.length > 0 ? `<span class="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded">${dayApps.length} зап.</span>` : ''}
+          ${dayApps.length > 0 ? `<span class="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">${dayApps.length} зап.</span>` : ''}
         </div>
 
         <div class="flex flex-wrap gap-1 my-1">
@@ -507,7 +584,7 @@ function renderMonthView(container) {
     </div>
   `;
 
-  // Клік на число місяця -> відкрити модалку або перейти в день
+  // Клік на число місяця -> перейти в режим «День»
   container.querySelectorAll('[data-month-day-click]').forEach(el => {
     el.addEventListener('click', () => {
       const dt = el.dataset.monthDayClick;
@@ -522,6 +599,8 @@ function renderMonthView(container) {
 // =================== ІНІЦІАЛІЗАЦІЯ ===================
 
 export function initCalendar() {
+  populateCalMasterFilter();
+
   const picker = $('admin-date-picker');
   if (picker) {
     picker.value = currentDateStr;
@@ -550,11 +629,12 @@ export function initCalendar() {
 
   // Кнопки швидкого створення
   $('btn-cal-new-booking')?.addEventListener('click', () => openManualBookingModal());
-  $('btn-cal-new-timeblock')?.addEventListener('click', () => openTimeBlockModal(masterFilter === 'all' ? 'm1' : masterFilter, currentDateStr));
-  $('btn-cal-edit-override')?.addEventListener('click', () => openDateOverrideModal(masterFilter === 'all' ? 'm1' : masterFilter, currentDateStr));
+  $('btn-cal-new-timeblock')?.addEventListener('click', () => openTimeBlockModal(masterFilter === 'all' ? (state.db.masters[0]?.id || 'm1') : masterFilter, currentDateStr));
+  $('btn-cal-edit-override')?.addEventListener('click', () => openDateOverrideModal(masterFilter === 'all' ? (state.db.masters[0]?.id || 'm1') : masterFilter, currentDateStr));
 
   state.subscribe(() => {
     if (state.isAdmin) {
+      populateCalMasterFilter();
       renderAdminCalendar();
     }
   });

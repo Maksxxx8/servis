@@ -74,14 +74,15 @@ export function renderSettingsForm() {
 // =================== ЗБЕРЕЖЕННЯ ===================
 
 export async function saveSalonSettings() {
+  const pinVal = $('set-admin-pin').value.trim() || '1234';
   state.db.salon.name = $('set-salon-name').value.trim() || 'Beauty Studio';
   state.db.salon.address = $('set-salon-address').value.trim();
   state.db.salon.workStart = Number($('set-work-start').value) || 9;
   state.db.salon.workEnd = Number($('set-work-end').value) || 20;
-  state.db.salon.adminPin = $('set-admin-pin').value.trim() || '1234';
+  state.db.salon.adminPin = pinVal;
   state.db.salon.tgBotToken = $('set-tg-token').value.trim();
   await saveDatabase();
-  alert('Налаштування салону збережено!');
+  alert(`Налаштування салону збережено!\nНовий PIN-код для входу майстрів: ${state.db.salon.adminPin}`);
 }
 
 export async function saveMastersSettings() {
@@ -108,6 +109,18 @@ export function initSettings() {
 
   const btnAddService = document.querySelector('[data-action="add-service"]');
   if (btnAddService) btnAddService.addEventListener('click', () => openServiceModal());
+
+  // Автозбереження нового PIN при зміні значення в полі
+  const pinInput = $('set-admin-pin');
+  if (pinInput) {
+    pinInput.addEventListener('change', () => {
+      const val = pinInput.value.trim();
+      if (val && val !== state.db.salon.adminPin) {
+        state.db.salon.adminPin = val;
+        saveDatabase();
+      }
+    });
+  }
 
   // Підписка на оновлення стану
   state.subscribe(() => {
