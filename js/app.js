@@ -4,7 +4,7 @@
  */
 
 import state from './state.js';
-import { loadDatabase } from './http/api-client.js';
+import { loadDatabase, startAutoSync } from './http/api-client.js';
 import { initAdminBar, showAdminBar, switchView } from './components/admin-bar.js';
 import { initPinModal, openPinModal } from './components/pin-modal.js';
 import { initServiceModal } from './components/service-modal.js';
@@ -56,6 +56,9 @@ async function bootstrap() {
     renderSettingsForm();
     renderClientsList();
   }
+
+  // Запуск фонової синхронізації між пристроями (кожні 15 сек + фокус вкладки)
+  startAutoSync(15000);
 }
 
 // Запуск після завантаження DOM
