@@ -256,13 +256,22 @@
             <input type="text" id="set-admin-pin" class="w-full border rounded-xl px-3 py-2 font-mono">
           </div>
           <div>
-            <label class="block text-xs text-slate-500 mb-1">Telegram Bot Token (для сповіщень)</label>
+            <label class="block text-xs text-slate-500 mb-1">Telegram Bot Token (від @BotFather)</label>
             <input type="text" id="set-tg-token" placeholder="123456:ABC-DEF..." class="w-full border rounded-xl px-3 py-2 font-mono text-xs">
           </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Telegram Chat ID адміністратора</label>
+            <input type="text" id="set-tg-chat-id" placeholder="напр. 123456789" class="w-full border rounded-xl px-3 py-2 font-mono text-xs">
+          </div>
         </div>
-        <button data-action="save-salon" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition">
-          💾 Зберегти налаштування салону
-        </button>
+        <div class="flex flex-wrap items-center gap-3">
+          <button data-action="save-salon" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition">
+            💾 Зберегти налаштування салону
+          </button>
+          <button id="btn-test-tg" type="button" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-4 py-2.5 rounded-xl transition flex items-center gap-1.5">
+            ✈️ Надіслати тест у Telegram
+          </button>
+        </div>
       </div>
 
       <!-- Блок 2: Профілі майстрів -->

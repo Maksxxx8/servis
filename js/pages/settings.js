@@ -18,6 +18,36 @@ export function renderSettingsForm() {
   f('set-work-end', state.db.salon.workEnd || 20);
   f('set-admin-pin', state.db.salon.adminPin || '1234');
   f('set-tg-token', state.db.salon.tgBotToken || '');
+  f('set-tg-chat-id', state.db.salon.tgChatId || '');
+
+  // Кнопка тесту Telegram
+  const testTgBtn = $('btn-test-tg');
+  if (testTgBtn) {
+    testTgBtn.onclick = async () => {
+      const token = $('set-tg-token')?.value.trim() || state.db.salon.tgBotToken;
+      const chatId = $('set-tg-chat-id')?.value.trim() || state.db.salon.tgChatId;
+      if (!token || !chatId) {
+        alert('Будь ласка, вкажіть Telegram Bot Token та Chat ID для відправки тесту.');
+        return;
+      }
+      testTgBtn.disabled = true;
+      testTgBtn.textContent = '⏳ Відправка...';
+      try {
+        const res = await fetch(`bot.php?action=test_send&chat_id=${encodeURIComponent(chatId)}`);
+        const json = await res.json();
+        if (json.ok) {
+          alert('✅ Тестове сповіщення успішно надіслано в Telegram!');
+        } else {
+          alert('❌ Помилка Telegram: ' + (json.error || 'Перевірте токен або натисніть /start у боті'));
+        }
+      } catch (e) {
+        alert('❌ Помилка зв\'язку з сервером: ' + e.message);
+      } finally {
+        testTgBtn.disabled = false;
+        testTgBtn.textContent = '✈️ Надіслати тест у Telegram';
+      }
+    };
+  }
 
   // Профілі майстрів
   const mastersEl = $('settings-masters-list');
@@ -36,6 +66,10 @@ export function renderSettingsForm() {
         <div>
           <label class="text-slate-400">Опис у віджеті</label>
           <input type="text" id="m-bio-${m.id}" value="${m.bio || ''}" class="w-full border rounded-lg px-2.5 py-1.5 mt-0.5 text-sm">
+        </div>
+        <div>
+          <label class="text-slate-400">Telegram Chat ID майстра (для особистих сповіщень)</label>
+          <input type="text" id="m-tg-${m.id}" value="${m.tgChatId || ''}" placeholder="напр. 987654321" class="w-full border rounded-lg px-2.5 py-1.5 mt-0.5 text-sm font-mono">
         </div>
       </div>
     `).join('');
@@ -81,6 +115,7 @@ export async function saveSalonSettings() {
   state.db.salon.workEnd = Number($('set-work-end').value) || 20;
   state.db.salon.adminPin = pinVal;
   state.db.salon.tgBotToken = $('set-tg-token').value.trim();
+  state.db.salon.tgChatId = $('set-tg-chat-id') ? $('set-tg-chat-id').value.trim() : '';
   await saveDatabase();
   alert(`Налаштування салону збережено!\nНовий PIN-код для входу майстрів: ${state.db.salon.adminPin}`);
 }
@@ -90,9 +125,11 @@ export async function saveMastersSettings() {
     const nameEl = $(`m-name-${m.id}`);
     const roleEl = $(`m-role-${m.id}`);
     const bioEl = $(`m-bio-${m.id}`);
+    const tgEl = $(`m-tg-${m.id}`);
     if (nameEl) m.name = nameEl.value.trim() || m.name;
     if (roleEl) m.role = roleEl.value.trim() || m.role;
     if (bioEl) m.bio = bioEl.value.trim();
+    if (tgEl) m.tgChatId = tgEl.value.trim();
   });
   await saveDatabase();
   alert('Профілі майстрів оновлено!');

@@ -1,6 +1,12 @@
 # Runtime log files
 *.log
 
+# SQLite database files (runtime data on server)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
 # OS & Editor files
 .DS_Store
 Thumbs.db
