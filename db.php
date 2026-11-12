@@ -1,19 +1,22 @@
 <?php
 /**
- * db.php — Менеджер реляційної бази даних CRM салону (SQLite / PDO)
+ * db.php — Менеджер бази даних CRM салону з підтримкою SQLite (PDO) та автоматичним JSON-фолбеком
  *
- * Переваги:
- * 1. Справжня реляційна SQL база даних (ACID транзакції, WAL-режим, індекси).
- * 2. Жодних проблем із пам'яттю та блокуванням при десятках тисяч записів.
- * 3. Автоматична міграція з database.json при першому запуску без втрати даних.
- * 4. Блискавичні вибірки для Telegram-бота (записи на сьогодні, пошук клієнта).
- * 5. Вбудована черга та лог сповіщень Telegram.
+ * Режими роботи:
+ * 1. Режим SQLite (Основний): використовує PDO SQLite, транзакції (ACID), індекси, WAL-режим.
+ * 2. Режим JSON Fallback (Резервний): якщо в Ubuntu не встановлено php-sqlite3, система
+ *    автоматично перемикається на надійне файлове сховище database.json, щоб сайт ЗАВЖДИ
+ *    залишався онлайн та працював стабільно!
  */
 
 class CRM_DB {
     private static ?CRM_DB $instance = null;
-    private PDO $pdo;
-    private string $dbPath;
+    private ?PDO $pdo = null;
+    private string $dataDir;
+    private string $sqlitePath;
+    private string $jsonPath;
+    private bool $useSqlite = false;
+    private string $engineStatus = '';
 
     public static function getInstance(): CRM_DB {
         if (self::$instance === null) {
@@ -23,52 +26,65 @@ class CRM_DB {
     }
 
     private function __construct() {
-        $dataDir = __DIR__ . '/data';
-        if (!is_dir($dataDir)) {
-            @mkdir($dataDir, 0777, true);
+        $this->dataDir = __DIR__ . '/data';
+        if (!is_dir($this->dataDir)) {
+            @mkdir($this->dataDir, 0777, true);
         }
 
-        $this->dbPath = $dataDir . '/salon.sqlite';
-        $isNew = !file_exists($this->dbPath);
+        $this->sqlitePath = $this->dataDir . '/salon.sqlite';
+        $this->jsonPath = $this->dataDir . '/database.json';
 
-        $this->pdo = new PDO("sqlite:" . $this->dbPath);
-        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        $this->pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        // Перевіряємо, чи доступний модуль pdo_sqlite в PHP на сервері
+        if (extension_loaded('pdo') && extension_loaded('pdo_sqlite')) {
+            try {
+                $isNew = !file_exists($this->sqlitePath);
+                $this->pdo = new PDO("sqlite:" . $this->sqlitePath);
+                $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+                $this->pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
-        // Оптимізація продуктивності SQLite:
-        // WAL (Write-Ahead Logging) дозволяє одночасне читання кількома клієнтами під час запису
-        $this->pdo->exec("PRAGMA journal_mode = WAL;");
-        $this->pdo->exec("PRAGMA synchronous = NORMAL;");
-        $this->pdo->exec("PRAGMA foreign_keys = ON;");
+                $this->pdo->exec("PRAGMA journal_mode = WAL;");
+                $this->pdo->exec("PRAGMA synchronous = NORMAL;");
+                $this->pdo->exec("PRAGMA foreign_keys = ON;");
 
-        $this->initSchema();
+                $this->initSqliteSchema();
 
-        // Якщо база нова, автоматично мігруємо існуючі дані з database.json
-        if ($isNew || $this->isTablesEmpty()) {
-            $this->migrateFromJson();
+                // Автоматична міграція існуючих даних з JSON при створенні SQLite
+                if ($isNew || $this->isTablesEmpty()) {
+                    $this->migrateFromJson();
+                }
+
+                $this->useSqlite = true;
+                $this->engineStatus = 'SQLite (PDO) — Активна SQL база';
+            } catch (Exception $e) {
+                error_log("SQLite init failed, falling back to JSON: " . $e->getMessage());
+                $this->useSqlite = false;
+                $this->engineStatus = 'JSON Fallback (Помилка SQLite: ' . $e->getMessage() . ')';
+            }
+        } else {
+            $this->useSqlite = false;
+            $this->engineStatus = 'JSON Fallback (розширення php-sqlite3 не встановлено на сервері)';
         }
     }
 
-    public function getPdo(): PDO {
+    public function isSqlite(): bool {
+        return $this->useSqlite;
+    }
+
+    public function getPdo(): ?PDO {
         return $this->pdo;
     }
 
-    public function getDbPath(): string {
-        return $this->dbPath;
-    }
-
     /**
-     * Створення таблиць бази даних та індексів
+     * Створення таблиць SQLite
      */
-    private function initSchema(): void {
+    private function initSqliteSchema(): void {
+        if (!$this->pdo) return;
         $this->pdo->exec("
-            -- 1. Налаштування салону (key-value)
             CREATE TABLE IF NOT EXISTS salon_settings (
                 key VARCHAR(64) PRIMARY KEY,
                 value TEXT NOT NULL
             );
 
-            -- 2. Майстри
             CREATE TABLE IF NOT EXISTS masters (
                 id VARCHAR(32) PRIMARY KEY,
                 name VARCHAR(128) NOT NULL,
@@ -79,13 +95,12 @@ class CRM_DB {
                 slot_step INT DEFAULT 30,
                 global_buffer INT DEFAULT 15,
                 ical_key VARCHAR(64) DEFAULT '',
-                weekly_schedule TEXT, -- JSON
-                date_overrides TEXT,  -- JSON
+                weekly_schedule TEXT,
+                date_overrides TEXT,
                 is_active INT DEFAULT 1,
                 sort_order INT DEFAULT 0
             );
 
-            -- 3. Послуги
             CREATE TABLE IF NOT EXISTS services (
                 id VARCHAR(32) PRIMARY KEY,
                 master_id VARCHAR(32) NOT NULL,
@@ -98,7 +113,6 @@ class CRM_DB {
             );
             CREATE INDEX IF NOT EXISTS idx_services_master ON services(master_id);
 
-            -- 4. Клієнти (CRM база клієнтів)
             CREATE TABLE IF NOT EXISTS clients (
                 id VARCHAR(64) PRIMARY KEY,
                 name VARCHAR(128) NOT NULL,
@@ -109,20 +123,19 @@ class CRM_DB {
             );
             CREATE INDEX IF NOT EXISTS idx_clients_phone ON clients(phone);
 
-            -- 5. Записи клієнтів (Appointments)
             CREATE TABLE IF NOT EXISTS appointments (
                 id VARCHAR(64) PRIMARY KEY,
                 master_id VARCHAR(32) NOT NULL,
                 client_id VARCHAR(64),
                 client_name VARCHAR(128) NOT NULL,
                 client_phone VARCHAR(32) NOT NULL,
-                date VARCHAR(10) NOT NULL, -- YYYY-MM-DD
-                time VARCHAR(5) NOT NULL,  -- HH:MM
+                date VARCHAR(10) NOT NULL,
+                time VARCHAR(5) NOT NULL,
                 duration INT NOT NULL,
                 buffer_time INT DEFAULT 15,
                 price REAL NOT NULL,
-                status VARCHAR(20) DEFAULT 'confirmed', -- confirmed, pending, completed, cancelled
-                service_ids TEXT, -- JSON масив id послуг: [\"s1\", \"s2\"]
+                status VARCHAR(20) DEFAULT 'confirmed',
+                service_ids TEXT,
                 notes TEXT DEFAULT '',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -132,7 +145,6 @@ class CRM_DB {
             CREATE INDEX IF NOT EXISTS idx_appointments_phone ON appointments(client_phone);
             CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);
 
-            -- 6. Технічні перерви / Особистий час майстрів
             CREATE TABLE IF NOT EXISTS time_blocks (
                 id VARCHAR(64) PRIMARY KEY,
                 master_id VARCHAR(32) NOT NULL,
@@ -144,14 +156,13 @@ class CRM_DB {
             );
             CREATE INDEX IF NOT EXISTS idx_timeblocks_master_date ON time_blocks(master_id, date);
 
-            -- 7. Черга та журнал сповіщень Telegram
             CREATE TABLE IF NOT EXISTS telegram_queue (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type VARCHAR(32) NOT NULL, -- 'new_booking', 'cancelled', 'reschedule', 'daily_digest'
+                type VARCHAR(32) NOT NULL,
                 appointment_id VARCHAR(64),
                 chat_id VARCHAR(64) NOT NULL,
                 message TEXT NOT NULL,
-                status VARCHAR(20) DEFAULT 'pending', -- pending, sent, failed
+                status VARCHAR(20) DEFAULT 'pending',
                 error_message TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 sent_at DATETIME
@@ -161,43 +172,44 @@ class CRM_DB {
     }
 
     private function isTablesEmpty(): bool {
+        if (!$this->pdo) return true;
         $count = (int)$this->pdo->query("SELECT count(*) FROM masters")->fetchColumn();
         return $count === 0;
     }
 
-    /**
-     * Автоматична міграція з database.json в SQLite
-     */
     public function migrateFromJson(): bool {
-        $jsonFile = __DIR__ . '/data/database.json';
-        if (!file_exists($jsonFile)) {
-            return false;
-        }
-
-        $raw = file_get_contents($jsonFile);
+        if (!file_exists($this->jsonPath)) return false;
+        $raw = @file_get_contents($this->jsonPath);
         $data = json_decode($raw, true);
-        if (!$data || !isset($data['salon'])) {
-            return false;
-        }
-
+        if (!$data || !isset($data['salon'])) return false;
         return $this->saveState($data, true);
     }
 
     /**
-     * Отримати повний стан CRM у форматі JSON для фронтенду
+     * Отримати стан CRM
      */
     public function getState(): array {
+        if ($this->useSqlite && $this->pdo) {
+            return $this->getSqliteState();
+        }
+        return $this->getJsonState();
+    }
+
+    private function getJsonState(): array {
+        if (file_exists($this->jsonPath)) {
+            $raw = @file_get_contents($this->jsonPath);
+            $parsed = json_decode($raw, true);
+            if ($parsed && isset($parsed['salon'])) {
+                return $parsed;
+            }
+        }
+        return $this->getDefaultState();
+    }
+
+    private function getSqliteState(): array {
         // 1. Салон
         $salonRows = $this->pdo->query("SELECT key, value FROM salon_settings")->fetchAll();
-        $salon = [
-            'name' => 'Beauty Studio',
-            'address' => 'м. Дніпро • Щодня 09:00–20:00',
-            'workStart' => 9,
-            'workEnd' => 20,
-            'adminPin' => '1234',
-            'tgBotToken' => '',
-            'tgChatId' => ''
-        ];
+        $salon = $this->getDefaultState()['salon'];
         foreach ($salonRows as $r) {
             $k = $r['key'];
             $v = $r['value'];
@@ -261,7 +273,7 @@ class CRM_DB {
             ];
         }
 
-        // 5. Технічні перерви (TimeBlocks)
+        // 5. Технічні перерви
         $tbRows = $this->pdo->query("SELECT * FROM time_blocks ORDER BY date ASC, start_time ASC")->fetchAll();
         $timeBlocks = [];
         foreach ($tbRows as $tb) {
@@ -285,9 +297,19 @@ class CRM_DB {
     }
 
     /**
-     * Зберегти повний стан CRM у базу даних з використанням транзакції
+     * Зберегти стан CRM (в SQLite та дублювати в JSON для надійності)
      */
     public function saveState(array $data, bool $isMigration = false): bool {
+        // Завжди зберігаємо резервну копію в JSON
+        $writtenJson = @file_put_contents($this->jsonPath, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+
+        if (!$this->useSqlite || !$this->pdo) {
+            if ($writtenJson === false) {
+                throw new Exception("Не вдалося зберегти дані в {$this->jsonPath}. Перевірте права www-data.");
+            }
+            return true;
+        }
+
         $this->pdo->beginTransaction();
         try {
             // 1. Салонні налаштування
@@ -404,7 +426,6 @@ class CRM_DB {
                     ]);
                 }
 
-                // Видаляємо записи, які видалив адмін в інтерфейсі (якщо це не перша міграція)
                 if (!$isMigration) {
                     if (empty($allAppIds)) {
                         $this->pdo->exec("DELETE FROM appointments");
@@ -416,7 +437,7 @@ class CRM_DB {
                 }
             }
 
-            // 5. Технічні перерви (TimeBlocks)
+            // 5. Технічні перерви
             if (isset($data['timeBlocks']) && is_array($data['timeBlocks'])) {
                 $this->pdo->exec("DELETE FROM time_blocks");
                 $stmtTb = $this->pdo->prepare("
@@ -437,11 +458,6 @@ class CRM_DB {
             }
 
             $this->pdo->commit();
-
-            // Також зберігаємо актуальний бекап у database.json для сумісності
-            $backupFile = __DIR__ . '/data/database.json';
-            @file_put_contents($backupFile, json_encode($this->getState(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-
             return true;
         } catch (Exception $e) {
             $this->pdo->rollBack();
@@ -451,30 +467,50 @@ class CRM_DB {
     }
 
     /**
-     * Отримати записи на конкретну дату (для Telegram-бота або швидкого рендеру)
+     * Отримати розклад на день
      */
     public function getAppointmentsForDate(string $date, ?string $masterId = null): array {
-        $sql = "
-            SELECT a.*, m.name as master_name, m.role as master_role
-            FROM appointments a
-            LEFT JOIN masters m ON a.master_id = m.id
-            WHERE a.date = :date AND a.status != 'cancelled'
-        ";
-        $params = [':date' => $date];
-
-        if ($masterId !== null) {
-            $sql .= " AND a.master_id = :master_id";
-            $params[':master_id'] = $masterId;
+        if ($this->useSqlite && $this->pdo) {
+            $sql = "
+                SELECT a.*, m.name as master_name, m.role as master_role
+                FROM appointments a
+                LEFT JOIN masters m ON a.master_id = m.id
+                WHERE a.date = :date AND a.status != 'cancelled'
+            ";
+            $params = [':date' => $date];
+            if ($masterId !== null) {
+                $sql .= " AND a.master_id = :master_id";
+                $params[':master_id'] = $masterId;
+            }
+            $sql .= " ORDER BY a.time ASC";
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute($params);
+            return $stmt->fetchAll();
         }
 
-        $sql .= " ORDER BY a.time ASC";
-        $stmt = $this->pdo->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll();
+        // JSON Fallback
+        $state = $this->getState();
+        $mastersMap = [];
+        foreach ($state['masters'] as $m) $mastersMap[$m['id']] = $m;
+
+        $res = [];
+        foreach ($state['appointments'] as $app) {
+            if ($app['date'] !== $date || ($app['status'] ?? '') === 'cancelled') continue;
+            if ($masterId !== null && $app['masterId'] !== $masterId) continue;
+            $app['master_name'] = $mastersMap[$app['masterId']]['name'] ?? 'Майстер';
+            $app['master_role'] = $mastersMap[$app['masterId']]['role'] ?? '';
+            $app['client_name'] = $app['clientName'] ?? '';
+            $app['client_phone'] = $app['clientPhone'] ?? '';
+            $app['buffer_time'] = $app['bufferTime'] ?? 15;
+            $app['service_ids'] = json_encode($app['serviceIds'] ?? []);
+            $res[] = $app;
+        }
+        usort($res, fn($x, $y) => strcmp($x['time'], $y['time']));
+        return $res;
     }
 
     /**
-     * Отримати текстове зведення записів для Telegram-бота
+     * Текстове зведення для Telegram
      */
     public function getScheduleSummaryForDate(string $date, ?string $targetMasterId = null): string {
         $records = $this->getAppointmentsForDate($date, $targetMasterId);
@@ -484,33 +520,39 @@ class CRM_DB {
             return "🗓 <b>Розклад на {$humanDate}:</b>\n\nЗаписів на цей день немає. Вільний день! ☕";
         }
 
-        // Групування за майстрами
         $byMaster = [];
         $totalSum = 0;
         foreach ($records as $r) {
             $mName = $r['master_name'] ?? 'Майстер';
-            if (!isset($byMaster[$mName])) {
-                $byMaster[$mName] = [];
-            }
+            if (!isset($byMaster[$mName])) $byMaster[$mName] = [];
             $byMaster[$mName][] = $r;
-            $totalSum += (float)$r['price'];
+            $totalSum += (float)($r['price'] ?? 0);
         }
+
+        $state = $this->getState();
+        $servicesMap = [];
+        foreach ($state['services'] as $s) $servicesMap[$s['id']] = $s['title'];
 
         $msg = "📋 <b>Записи на {$humanDate}:</b>\n";
         foreach ($byMaster as $mName => $list) {
             $msg .= "\n✨ <b>{$mName}:</b>\n";
             foreach ($list as $app) {
-                $statusIcon = $app['status'] === 'confirmed' ? '✅' : '⏳';
-                $serviceTitles = [];
-                $sIds = !empty($app['service_ids']) ? json_decode($app['service_ids'], true) : [];
-                if (!empty($sIds)) {
-                    $in = implode("','", array_map('addslashes', $sIds));
-                    $srvRows = $this->pdo->query("SELECT title FROM services WHERE id IN ('$in')")->fetchAll();
-                    $serviceTitles = array_column($srvRows, 'title');
+                $statusIcon = ($app['status'] ?? '') === 'confirmed' ? '✅' : '⏳';
+                $srvIds = is_array($app['service_ids'] ?? null) 
+                    ? $app['service_ids'] 
+                    : (!empty($app['service_ids']) ? json_decode($app['service_ids'], true) : ($app['serviceIds'] ?? []));
+                
+                $srvTitles = [];
+                if (!empty($srvIds)) {
+                    foreach ($srvIds as $sid) {
+                        if (isset($servicesMap[$sid])) $srvTitles[] = $servicesMap[$sid];
+                    }
                 }
-                $srvText = !empty($serviceTitles) ? implode(', ', $serviceTitles) : 'Послуга';
+                $srvText = !empty($srvTitles) ? implode(', ', $srvTitles) : 'Послуга';
 
-                $msg .= "• <b>{$app['time']}</b> — {$app['client_name']} ({$app['client_phone']})\n";
+                $cName = $app['client_name'] ?? ($app['clientName'] ?? 'Клієнт');
+                $cPhone = $app['client_phone'] ?? ($app['clientPhone'] ?? '');
+                $msg .= "• <b>{$app['time']}</b> — {$cName} ({$cPhone})\n";
                 $msg .= "  <i>{$srvText}</i> • {$app['price']} ₴ {$statusIcon}\n";
                 if (!empty($app['notes'])) {
                     $msg .= "  💬 <i>{$app['notes']}</i>\n";
@@ -518,29 +560,32 @@ class CRM_DB {
             }
         }
 
-        $msg .= "\n💰 <b>Загальна виручка за день:</b> {$totalSum} ₴";
+        $msg .= "\n💰 <b>Загальна виручка за день:</b> " . number_format($totalSum, 0, '.', ' ') . " ₴";
         return $msg;
     }
 
     /**
-     * Додати сповіщення у чергу Telegram
+     * Черга Telegram
      */
     public function enqueueTelegram(string $type, ?string $appId, string $chatId, string $message): int {
-        $stmt = $this->pdo->prepare("
-            INSERT INTO telegram_queue (type, appointment_id, chat_id, message, status)
-            VALUES (:type, :app_id, :chat_id, :message, 'pending')
-        ");
-        $stmt->execute([
-            ':type' => $type,
-            ':app_id' => $appId,
-            ':chat_id' => $chatId,
-            ':message' => $message
-        ]);
-        return (int)$this->pdo->lastInsertId();
+        if ($this->useSqlite && $this->pdo) {
+            $stmt = $this->pdo->prepare("
+                INSERT INTO telegram_queue (type, appointment_id, chat_id, message, status)
+                VALUES (:type, :app_id, :chat_id, :message, 'pending')
+            ");
+            $stmt->execute([
+                ':type' => $type,
+                ':app_id' => $appId,
+                ':chat_id' => $chatId,
+                ':message' => $message
+            ]);
+            return (int)$this->pdo->lastInsertId();
+        }
+        return 0;
     }
 
     /**
-     * Відправити повідомлення в Telegram Bot API
+     * Відправка повідомлення в Telegram Bot API
      */
     public static function sendTelegram(string $token, string $chatId, string $text, ?array $replyMarkup = null): bool {
         if (empty($token) || empty($chatId) || empty($text)) {
@@ -573,27 +618,53 @@ class CRM_DB {
     }
 
     /**
-     * Діагностична інформація про стан бази даних
+     * Діагностична інформація
      */
     public function getDiagnostic(): array {
-        $tables = ['salon_settings', 'masters', 'services', 'clients', 'appointments', 'time_blocks', 'telegram_queue'];
-        $counts = [];
-        foreach ($tables as $t) {
-            try {
-                $counts[$t] = (int)$this->pdo->query("SELECT count(*) FROM $t")->fetchColumn();
-            } catch (Exception $e) {
-                $counts[$t] = -1;
+        $phpSqliteInstalled = extension_loaded('pdo_sqlite');
+        
+        $diag = [
+            'status' => 'ok',
+            'active_engine' => $this->useSqlite ? 'SQLite (PDO)' : 'JSON File Storage',
+            'engine_status' => $this->engineStatus,
+            'php_sqlite_installed' => $phpSqliteInstalled,
+            'sqlite_file_exists' => file_exists($this->sqlitePath),
+            'json_file_exists' => file_exists($this->jsonPath),
+            'install_sqlite_command' => 'sudo apt update && sudo apt install -y php-sqlite3 && sudo systemctl restart apache2'
+        ];
+
+        if ($this->useSqlite && $this->pdo) {
+            $diag['sqlite_version'] = $this->pdo->query("SELECT sqlite_version()")->fetchColumn();
+            $diag['db_size_bytes'] = file_exists($this->sqlitePath) ? filesize($this->sqlitePath) : 0;
+            $counts = [];
+            foreach (['salon_settings', 'masters', 'services', 'clients', 'appointments', 'time_blocks', 'telegram_queue'] as $t) {
+                try {
+                    $counts[$t] = (int)$this->pdo->query("SELECT count(*) FROM $t")->fetchColumn();
+                } catch (Exception $e) {
+                    $counts[$t] = -1;
+                }
             }
+            $diag['counts'] = $counts;
         }
 
+        return $diag;
+    }
+
+    private function getDefaultState(): array {
         return [
-            'status' => 'ok',
-            'engine' => 'SQLite (PDO)',
-            'sqlite_version' => $this->pdo->query("SELECT sqlite_version()")->fetchColumn(),
-            'db_file' => $this->dbPath,
-            'db_size_bytes' => file_exists($this->dbPath) ? filesize($this->dbPath) : 0,
-            'db_writable' => is_writable($this->dbPath) || is_writable(dirname($this->dbPath)),
-            'counts' => $counts
+            'salon' => [
+                'name' => 'Beauty Studio',
+                'address' => 'м. Дніпро • Щодня 09:00–20:00',
+                'workStart' => 9,
+                'workEnd' => 20,
+                'adminPin' => '1234',
+                'tgBotToken' => '',
+                'tgChatId' => ''
+            ],
+            'masters' => [],
+            'services' => [],
+            'appointments' => [],
+            'timeBlocks' => []
         ];
     }
 }

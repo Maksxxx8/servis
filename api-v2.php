@@ -45,7 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
     $dbDiag = $db->getDiagnostic();
 
     echo json_encode([
-        "status" => ($dirWritable && $dbDiag['db_writable']) ? "ok" : "permission_error",
+        "status" => $dirWritable ? "ok" : "permission_error",
         "database" => $dbDiag,
         "php_user" => $phpUser,
         "base_dir" => __DIR__,
