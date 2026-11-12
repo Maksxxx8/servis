@@ -1,8 +1,7 @@
 # Runtime log files
 *.log
 
-# SQLite database files (runtime data on server)
-*.sqlite
+# SQLite temporary journal files
 *.sqlite-wal
 *.sqlite-shm
 *.sqlite-journal

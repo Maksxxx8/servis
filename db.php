@@ -1,22 +1,19 @@
 <?php
 /**
- * db.php — Менеджер бази даних CRM салону з підтримкою SQLite (PDO) та автоматичним JSON-фолбеком
+ * db.php — Менеджер бази даних Beauty Studio CRM (Pure SQLite / PDO)
  *
- * Режими роботи:
- * 1. Режим SQLite (Основний): використовує PDO SQLite, транзакції (ACID), індекси, WAL-режим.
- * 2. Режим JSON Fallback (Резервний): якщо в Ubuntu не встановлено php-sqlite3, система
- *    автоматично перемикається на надійне файлове сховище database.json, щоб сайт ЗАВЖДИ
- *    залишався онлайн та працював стабільно!
+ * Усі дані зберігаються виключно в реляційній базі даних SQLite (data/salon.sqlite).
+ * Особливості:
+ * - Повна підтримка транзакцій (ACID) та цілісності даних.
+ * - Оптимізований режим журналу WAL (Write-Ahead Logging).
+ * - Швидкі індекси для онлайн-запису, пошуку клієнтів та Telegram-бота.
+ * - Автоматична ініціалізація структури таблиць та дефолтних даних при першому запуску.
  */
 
 class CRM_DB {
     private static ?CRM_DB $instance = null;
-    private ?PDO $pdo = null;
-    private string $dataDir;
-    private string $sqlitePath;
-    private string $jsonPath;
-    private bool $useSqlite = false;
-    private string $engineStatus = '';
+    private PDO $pdo;
+    private string $dbPath;
 
     public static function getInstance(): CRM_DB {
         if (self::$instance === null) {
@@ -26,59 +23,46 @@ class CRM_DB {
     }
 
     private function __construct() {
-        $this->dataDir = __DIR__ . '/data';
-        if (!is_dir($this->dataDir)) {
-            @mkdir($this->dataDir, 0777, true);
+        if (!extension_loaded('pdo') || !extension_loaded('pdo_sqlite')) {
+            throw new Exception("Модуль PHP 'pdo_sqlite' не знайдено на сервері. Для роботи встановіть його командою: sudo apt-get update && sudo apt-get install -y php-sqlite3 && sudo systemctl restart apache2");
         }
 
-        $this->sqlitePath = $this->dataDir . '/salon.sqlite';
-        $this->jsonPath = $this->dataDir . '/database.json';
+        $dataDir = __DIR__ . '/data';
+        if (!is_dir($dataDir)) {
+            @mkdir($dataDir, 0777, true);
+        }
 
-        // Перевіряємо, чи доступний модуль pdo_sqlite в PHP на сервері
-        if (extension_loaded('pdo') && extension_loaded('pdo_sqlite')) {
-            try {
-                $isNew = !file_exists($this->sqlitePath);
-                $this->pdo = new PDO("sqlite:" . $this->sqlitePath);
-                $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-                $this->pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $this->dbPath = $dataDir . '/salon.sqlite';
+        $isNew = !file_exists($this->dbPath);
 
-                $this->pdo->exec("PRAGMA journal_mode = WAL;");
-                $this->pdo->exec("PRAGMA synchronous = NORMAL;");
-                $this->pdo->exec("PRAGMA foreign_keys = ON;");
+        $this->pdo = new PDO("sqlite:" . $this->dbPath);
+        $this->pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $this->pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
-                $this->initSqliteSchema();
+        // Налаштування продуктивності SQLite
+        $this->pdo->exec("PRAGMA journal_mode = WAL;");
+        $this->pdo->exec("PRAGMA synchronous = NORMAL;");
+        $this->pdo->exec("PRAGMA foreign_keys = ON;");
 
-                // Автоматична міграція існуючих даних з JSON при створенні SQLite
-                if ($isNew || $this->isTablesEmpty()) {
-                    $this->migrateFromJson();
-                }
+        $this->initSchema();
 
-                $this->useSqlite = true;
-                $this->engineStatus = 'SQLite (PDO) — Активна SQL база';
-            } catch (Exception $e) {
-                error_log("SQLite init failed, falling back to JSON: " . $e->getMessage());
-                $this->useSqlite = false;
-                $this->engineStatus = 'JSON Fallback (Помилка SQLite: ' . $e->getMessage() . ')';
-            }
-        } else {
-            $this->useSqlite = false;
-            $this->engineStatus = 'JSON Fallback (розширення php-sqlite3 не встановлено на сервері)';
+        if ($isNew || $this->isTablesEmpty()) {
+            $this->seedDefaultData();
         }
     }
 
-    public function isSqlite(): bool {
-        return $this->useSqlite;
-    }
-
-    public function getPdo(): ?PDO {
+    public function getPdo(): PDO {
         return $this->pdo;
     }
 
+    public function getDbPath(): string {
+        return $this->dbPath;
+    }
+
     /**
-     * Створення таблиць SQLite
+     * Створення таблиць та індексів бази даних
      */
-    private function initSqliteSchema(): void {
-        if (!$this->pdo) return;
+    private function initSchema(): void {
         $this->pdo->exec("
             CREATE TABLE IF NOT EXISTS salon_settings (
                 key VARCHAR(64) PRIMARY KEY,
@@ -172,44 +156,138 @@ class CRM_DB {
     }
 
     private function isTablesEmpty(): bool {
-        if (!$this->pdo) return true;
         $count = (int)$this->pdo->query("SELECT count(*) FROM masters")->fetchColumn();
         return $count === 0;
     }
 
-    public function migrateFromJson(): bool {
-        if (!file_exists($this->jsonPath)) return false;
-        $raw = @file_get_contents($this->jsonPath);
-        $data = json_decode($raw, true);
-        if (!$data || !isset($data['salon'])) return false;
-        return $this->saveState($data, true);
+    /**
+     * Початкове наповнення бази даних за замовчуванням
+     */
+    public function seedDefaultData(): void {
+        $today = date('Y-m-d');
+
+        $defaultState = [
+            'salon' => [
+                'name' => 'Beauty Studio • Світлана & Марія',
+                'address' => 'м. Дніпро • Щодня 09:00–20:00',
+                'workStart' => 9,
+                'workEnd' => 20,
+                'adminPin' => '1234',
+                'tgBotToken' => '',
+                'tgChatId' => ''
+            ],
+            'masters' => [
+                [
+                    'id' => 'm1',
+                    'name' => 'Світлана',
+                    'role' => 'Майстер-бровіст',
+                    'bio' => 'Архітектура, фарбування та ламінування брів',
+                    'avatar' => '✨',
+                    'tgChatId' => '',
+                    'slotStep' => 30,
+                    'globalBuffer' => 15,
+                    'icalKey' => 'key_m1_svitlana',
+                    'weeklySchedule' => [
+                        '1' => ['isWorking' => true, 'workStart' => '09:00', 'workEnd' => '20:00', 'regularBreaks' => [['start' => '13:00', 'end' => '14:00', 'name' => 'Обід']]],
+                        '2' => ['isWorking' => true, 'workStart' => '09:00', 'workEnd' => '20:00', 'regularBreaks' => [['start' => '13:00', 'end' => '14:00', 'name' => 'Обід']]],
+                        '3' => ['isWorking' => true, 'workStart' => '09:00', 'workEnd' => '20:00', 'regularBreaks' => [['start' => '13:00', 'end' => '14:00', 'name' => 'Обід']]],
+                        '4' => ['isWorking' => true, 'workStart' => '09:00', 'workEnd' => '20:00', 'regularBreaks' => [['start' => '13:00', 'end' => '14:00', 'name' => 'Обід']]],
+                        '5' => ['isWorking' => true, 'workStart' => '09:00', 'workEnd' => '20:00', 'regularBreaks' => [['start' => '13:00', 'end' => '14:00', 'name' => 'Обід']]],
+                        '6' => ['isWorking' => true, 'workStart' => '10:00', 'workEnd' => '18:00', 'regularBreaks' => []],
+                        '0' => ['isWorking' => false, 'workStart' => '10:00', 'workEnd' => '18:00', 'regularBreaks' => []]
+                    ],
+                    'dateOverrides' => new stdClass()
+                ],
+                [
+                    'id' => 'm2',
+                    'name' => 'Марія',
+                    'role' => 'Майстер манікюру',
+                    'bio' => 'Апаратний манікюр, укріплення гелем, педикюр',
+                    'avatar' => '💅',
+                    'tgChatId' => '',
+                    'slotStep' => 30,
+                    'globalBuffer' => 15,
+                    'icalKey' => 'key_m2_mariia',
+                    'weeklySchedule' => [
+                        '1' => ['isWorking' => true, 'workStart' => '09:00', 'workEnd' => '20:00', 'regularBreaks' => [['start' => '14:00', 'end' => '15:00', 'name' => 'Обід']]],
+                        '2' => ['isWorking' => true, 'workStart' => '09:00', 'workEnd' => '20:00', 'regularBreaks' => [['start' => '14:00', 'end' => '15:00', 'name' => 'Обід']]],
+                        '3' => ['isWorking' => true, 'workStart' => '09:00', 'workEnd' => '20:00', 'regularBreaks' => [['start' => '14:00', 'end' => '15:00', 'name' => 'Обід']]],
+                        '4' => ['isWorking' => true, 'workStart' => '09:00', 'workEnd' => '20:00', 'regularBreaks' => [['start' => '14:00', 'end' => '15:00', 'name' => 'Обід']]],
+                        '5' => ['isWorking' => true, 'workStart' => '09:00', 'workEnd' => '20:00', 'regularBreaks' => [['start' => '14:00', 'end' => '15:00', 'name' => 'Обід']]],
+                        '6' => ['isWorking' => true, 'workStart' => '10:00', 'workEnd' => '17:00', 'regularBreaks' => []],
+                        '0' => ['isWorking' => false, 'workStart' => '10:00', 'workEnd' => '17:00', 'regularBreaks' => []]
+                    ],
+                    'dateOverrides' => new stdClass()
+                ]
+            ],
+            'services' => [
+                ['id' => 's1', 'masterId' => 'm1', 'title' => 'Архітектура + корекція та фарбування брів', 'duration' => 60, 'bufferTime' => 15, 'price' => 500],
+                ['id' => 's2', 'masterId' => 'm1', 'title' => 'Ламінування брів (повний комплекс)', 'duration' => 60, 'bufferTime' => 15, 'price' => 650],
+                ['id' => 's3', 'masterId' => 'm1', 'title' => 'Корекція брів (віск / пінцет)', 'duration' => 30, 'bufferTime' => 10, 'price' => 300],
+                ['id' => 's4', 'masterId' => 'm2', 'title' => 'Манікюр комплекс (зняття + гігієна + гель-лак)', 'duration' => 90, 'bufferTime' => 15, 'price' => 650],
+                ['id' => 's5', 'masterId' => 'm2', 'title' => 'Манікюр з укріпленням гелем / полігелем', 'duration' => 120, 'bufferTime' => 15, 'price' => 800],
+                ['id' => 's6', 'masterId' => 'm2', 'title' => 'Гігієнічний манікюр без покриття', 'duration' => 60, 'bufferTime' => 10, 'price' => 400]
+            ],
+            'appointments' => [
+                [
+                    'id' => 'a1',
+                    'masterId' => 'm1',
+                    'serviceIds' => ['s1'],
+                    'date' => $today,
+                    'time' => '09:00',
+                    'duration' => 60,
+                    'bufferTime' => 15,
+                    'price' => 500,
+                    'clientName' => 'Олена',
+                    'clientPhone' => '+380671112233',
+                    'status' => 'confirmed',
+                    'notes' => 'Тон темно-русий, чутлива шкіра'
+                ],
+                [
+                    'id' => 'a2',
+                    'masterId' => 'm2',
+                    'serviceIds' => ['s4'],
+                    'date' => $today,
+                    'time' => '09:00',
+                    'duration' => 90,
+                    'bufferTime' => 15,
+                    'price' => 650,
+                    'clientName' => 'Марина',
+                    'clientPhone' => '+380509998877',
+                    'status' => 'pending',
+                    'notes' => 'Молочна база, мигдаль 2'
+                ]
+            ],
+            'timeBlocks' => [
+                [
+                    'id' => 'tb1',
+                    'masterId' => 'm1',
+                    'date' => $today,
+                    'startTime' => '16:00',
+                    'endTime' => '16:45',
+                    'reason' => '☕ Особистий час / Кава'
+                ]
+            ]
+        ];
+
+        $this->saveState($defaultState, true);
     }
 
     /**
-     * Отримати стан CRM
+     * Отримати повний стан CRM у форматі JSON для фронтенду
      */
     public function getState(): array {
-        if ($this->useSqlite && $this->pdo) {
-            return $this->getSqliteState();
-        }
-        return $this->getJsonState();
-    }
-
-    private function getJsonState(): array {
-        if (file_exists($this->jsonPath)) {
-            $raw = @file_get_contents($this->jsonPath);
-            $parsed = json_decode($raw, true);
-            if ($parsed && isset($parsed['salon'])) {
-                return $parsed;
-            }
-        }
-        return $this->getDefaultState();
-    }
-
-    private function getSqliteState(): array {
         // 1. Салон
         $salonRows = $this->pdo->query("SELECT key, value FROM salon_settings")->fetchAll();
-        $salon = $this->getDefaultState()['salon'];
+        $salon = [
+            'name' => 'Beauty Studio • Світлана & Марія',
+            'address' => 'м. Дніпро • Щодня 09:00–20:00',
+            'workStart' => 9,
+            'workEnd' => 20,
+            'adminPin' => '1234',
+            'tgBotToken' => '',
+            'tgChatId' => ''
+        ];
         foreach ($salonRows as $r) {
             $k = $r['key'];
             $v = $r['value'];
@@ -273,7 +351,7 @@ class CRM_DB {
             ];
         }
 
-        // 5. Технічні перерви
+        // 5. Технічні перерви (TimeBlocks)
         $tbRows = $this->pdo->query("SELECT * FROM time_blocks ORDER BY date ASC, start_time ASC")->fetchAll();
         $timeBlocks = [];
         foreach ($tbRows as $tb) {
@@ -297,19 +375,9 @@ class CRM_DB {
     }
 
     /**
-     * Зберегти стан CRM (в SQLite та дублювати в JSON для надійності)
+     * Зберегти стан у базу даних з використанням транзакції
      */
-    public function saveState(array $data, bool $isMigration = false): bool {
-        // Завжди зберігаємо резервну копію в JSON
-        $writtenJson = @file_put_contents($this->jsonPath, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-
-        if (!$this->useSqlite || !$this->pdo) {
-            if ($writtenJson === false) {
-                throw new Exception("Не вдалося зберегти дані в {$this->jsonPath}. Перевірте права www-data.");
-            }
-            return true;
-        }
-
+    public function saveState(array $data, bool $isSeeding = false): bool {
         $this->pdo->beginTransaction();
         try {
             // 1. Салонні налаштування
@@ -349,7 +417,7 @@ class CRM_DB {
                     ]);
                 }
 
-                if (!$isMigration && !empty($activeMasterIds)) {
+                if (!$isSeeding && !empty($activeMasterIds)) {
                     $placeholders = implode(',', array_fill(0, count($activeMasterIds), '?'));
                     $delStmt = $this->pdo->prepare("DELETE FROM masters WHERE id NOT IN ($placeholders)");
                     $delStmt->execute($activeMasterIds);
@@ -426,7 +494,7 @@ class CRM_DB {
                     ]);
                 }
 
-                if (!$isMigration) {
+                if (!$isSeeding) {
                     if (empty($allAppIds)) {
                         $this->pdo->exec("DELETE FROM appointments");
                     } else {
@@ -467,50 +535,28 @@ class CRM_DB {
     }
 
     /**
-     * Отримати розклад на день
+     * Отримати розклад на конкретну дату
      */
     public function getAppointmentsForDate(string $date, ?string $masterId = null): array {
-        if ($this->useSqlite && $this->pdo) {
-            $sql = "
-                SELECT a.*, m.name as master_name, m.role as master_role
-                FROM appointments a
-                LEFT JOIN masters m ON a.master_id = m.id
-                WHERE a.date = :date AND a.status != 'cancelled'
-            ";
-            $params = [':date' => $date];
-            if ($masterId !== null) {
-                $sql .= " AND a.master_id = :master_id";
-                $params[':master_id'] = $masterId;
-            }
-            $sql .= " ORDER BY a.time ASC";
-            $stmt = $this->pdo->prepare($sql);
-            $stmt->execute($params);
-            return $stmt->fetchAll();
+        $sql = "
+            SELECT a.*, m.name as master_name, m.role as master_role
+            FROM appointments a
+            LEFT JOIN masters m ON a.master_id = m.id
+            WHERE a.date = :date AND a.status != 'cancelled'
+        ";
+        $params = [':date' => $date];
+        if ($masterId !== null) {
+            $sql .= " AND a.master_id = :master_id";
+            $params[':master_id'] = $masterId;
         }
-
-        // JSON Fallback
-        $state = $this->getState();
-        $mastersMap = [];
-        foreach ($state['masters'] as $m) $mastersMap[$m['id']] = $m;
-
-        $res = [];
-        foreach ($state['appointments'] as $app) {
-            if ($app['date'] !== $date || ($app['status'] ?? '') === 'cancelled') continue;
-            if ($masterId !== null && $app['masterId'] !== $masterId) continue;
-            $app['master_name'] = $mastersMap[$app['masterId']]['name'] ?? 'Майстер';
-            $app['master_role'] = $mastersMap[$app['masterId']]['role'] ?? '';
-            $app['client_name'] = $app['clientName'] ?? '';
-            $app['client_phone'] = $app['clientPhone'] ?? '';
-            $app['buffer_time'] = $app['bufferTime'] ?? 15;
-            $app['service_ids'] = json_encode($app['serviceIds'] ?? []);
-            $res[] = $app;
-        }
-        usort($res, fn($x, $y) => strcmp($x['time'], $y['time']));
-        return $res;
+        $sql .= " ORDER BY a.time ASC";
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+        return $stmt->fetchAll();
     }
 
     /**
-     * Текстове зведення для Telegram
+     * Текстове зведення розкладу для Telegram
      */
     public function getScheduleSummaryForDate(string $date, ?string $targetMasterId = null): string {
         $records = $this->getAppointmentsForDate($date, $targetMasterId);
@@ -538,10 +584,7 @@ class CRM_DB {
             $msg .= "\n✨ <b>{$mName}:</b>\n";
             foreach ($list as $app) {
                 $statusIcon = ($app['status'] ?? '') === 'confirmed' ? '✅' : '⏳';
-                $srvIds = is_array($app['service_ids'] ?? null) 
-                    ? $app['service_ids'] 
-                    : (!empty($app['service_ids']) ? json_decode($app['service_ids'], true) : ($app['serviceIds'] ?? []));
-                
+                $srvIds = !empty($app['service_ids']) ? json_decode($app['service_ids'], true) : [];
                 $srvTitles = [];
                 if (!empty($srvIds)) {
                     foreach ($srvIds as $sid) {
@@ -550,8 +593,8 @@ class CRM_DB {
                 }
                 $srvText = !empty($srvTitles) ? implode(', ', $srvTitles) : 'Послуга';
 
-                $cName = $app['client_name'] ?? ($app['clientName'] ?? 'Клієнт');
-                $cPhone = $app['client_phone'] ?? ($app['clientPhone'] ?? '');
+                $cName = $app['client_name'] ?? 'Клієнт';
+                $cPhone = $app['client_phone'] ?? '';
                 $msg .= "• <b>{$app['time']}</b> — {$cName} ({$cPhone})\n";
                 $msg .= "  <i>{$srvText}</i> • {$app['price']} ₴ {$statusIcon}\n";
                 if (!empty($app['notes'])) {
@@ -565,23 +608,20 @@ class CRM_DB {
     }
 
     /**
-     * Черга Telegram
+     * Додати сповіщення в чергу
      */
     public function enqueueTelegram(string $type, ?string $appId, string $chatId, string $message): int {
-        if ($this->useSqlite && $this->pdo) {
-            $stmt = $this->pdo->prepare("
-                INSERT INTO telegram_queue (type, appointment_id, chat_id, message, status)
-                VALUES (:type, :app_id, :chat_id, :message, 'pending')
-            ");
-            $stmt->execute([
-                ':type' => $type,
-                ':app_id' => $appId,
-                ':chat_id' => $chatId,
-                ':message' => $message
-            ]);
-            return (int)$this->pdo->lastInsertId();
-        }
-        return 0;
+        $stmt = $this->pdo->prepare("
+            INSERT INTO telegram_queue (type, appointment_id, chat_id, message, status)
+            VALUES (:type, :app_id, :chat_id, :message, 'pending')
+        ");
+        $stmt->execute([
+            ':type' => $type,
+            ':app_id' => $appId,
+            ':chat_id' => $chatId,
+            ':message' => $message
+        ]);
+        return (int)$this->pdo->lastInsertId();
     }
 
     /**
@@ -618,53 +658,28 @@ class CRM_DB {
     }
 
     /**
-     * Діагностична інформація
+     * Діагностична інформація про базу даних
      */
     public function getDiagnostic(): array {
-        $phpSqliteInstalled = extension_loaded('pdo_sqlite');
-        
-        $diag = [
-            'status' => 'ok',
-            'active_engine' => $this->useSqlite ? 'SQLite (PDO)' : 'JSON File Storage',
-            'engine_status' => $this->engineStatus,
-            'php_sqlite_installed' => $phpSqliteInstalled,
-            'sqlite_file_exists' => file_exists($this->sqlitePath),
-            'json_file_exists' => file_exists($this->jsonPath),
-            'install_sqlite_command' => 'sudo apt update && sudo apt install -y php-sqlite3 && sudo systemctl restart apache2'
-        ];
-
-        if ($this->useSqlite && $this->pdo) {
-            $diag['sqlite_version'] = $this->pdo->query("SELECT sqlite_version()")->fetchColumn();
-            $diag['db_size_bytes'] = file_exists($this->sqlitePath) ? filesize($this->sqlitePath) : 0;
-            $counts = [];
-            foreach (['salon_settings', 'masters', 'services', 'clients', 'appointments', 'time_blocks', 'telegram_queue'] as $t) {
-                try {
-                    $counts[$t] = (int)$this->pdo->query("SELECT count(*) FROM $t")->fetchColumn();
-                } catch (Exception $e) {
-                    $counts[$t] = -1;
-                }
+        $tables = ['salon_settings', 'masters', 'services', 'clients', 'appointments', 'time_blocks', 'telegram_queue'];
+        $counts = [];
+        foreach ($tables as $t) {
+            try {
+                $counts[$t] = (int)$this->pdo->query("SELECT count(*) FROM $t")->fetchColumn();
+            } catch (Exception $e) {
+                $counts[$t] = -1;
             }
-            $diag['counts'] = $counts;
         }
 
-        return $diag;
-    }
-
-    private function getDefaultState(): array {
         return [
-            'salon' => [
-                'name' => 'Beauty Studio',
-                'address' => 'м. Дніпро • Щодня 09:00–20:00',
-                'workStart' => 9,
-                'workEnd' => 20,
-                'adminPin' => '1234',
-                'tgBotToken' => '',
-                'tgChatId' => ''
-            ],
-            'masters' => [],
-            'services' => [],
-            'appointments' => [],
-            'timeBlocks' => []
+            'status' => 'ok',
+            'engine' => 'SQLite (PDO)',
+            'sqlite_version' => $this->pdo->query("SELECT sqlite_version()")->fetchColumn(),
+            'db_file' => $this->dbPath,
+            'db_file_exists' => file_exists($this->dbPath),
+            'db_size_bytes' => file_exists($this->dbPath) ? filesize($this->dbPath) : 0,
+            'db_writable' => is_writable($this->dbPath) || is_writable(dirname($this->dbPath)),
+            'counts' => $counts
         ];
     }
 }
