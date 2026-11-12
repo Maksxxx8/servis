@@ -43,11 +43,11 @@ export function updateServerBadge() {
   if (!ind || !txt) return;
 
   if (state.serverConnected) {
-    ind.className = "w-2.5 h-2.5 rounded-full bg-emerald-400";
-    txt.textContent = "Сервер підключено (VPS)";
+    ind.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+    txt.textContent = "Онлайн";
   } else {
-    ind.className = "w-2.5 h-2.5 rounded-full bg-amber-400";
-    txt.textContent = "Локальний режим (Браузер)";
+    ind.className = "w-2 h-2 rounded-full bg-amber-400";
+    txt.textContent = "Офлайн";
   }
 }
 
