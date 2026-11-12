@@ -63,10 +63,8 @@ export function renderWidgetServices() {
       <div data-service-id="${s.id}" class="p-3.5 rounded-2xl border ${checked ? 'border-indigo-600 bg-indigo-50/50' : 'border-slate-200 hover:border-slate-300'} cursor-pointer transition flex items-center justify-between gap-3">
         <div>
           <div class="font-semibold text-sm text-slate-800">${s.title}</div>
-          <div class="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
+          <div class="text-xs text-slate-500 mt-0.5">
             <span>⏱ ${s.duration} хв</span>
-            <span class="text-slate-400">•</span>
-            <span class="text-amber-700 font-medium">⌛ +${buf} хв буфер</span>
           </div>
         </div>
         <div class="flex items-center gap-3">
@@ -122,7 +120,7 @@ export function renderTimeSlots() {
   const summaryEl = $('step3-summary');
   if (summaryEl) {
     if (calc.isWorking) {
-      summaryEl.textContent = `Робочий день: ${calc.daySched.workStart}–${calc.daySched.workEnd} • Зайнятість: ${calc.totalDuration} хв (+ ${calc.buffer} хв буфер)`;
+      summaryEl.textContent = `Робочий день: ${calc.daySched.workStart}–${calc.daySched.workEnd} • Тривалість: ${calc.totalDuration} хв`;
     } else {
       summaryEl.textContent = `⚠️ ${calc.reason || 'Вихідний день'}`;
     }
@@ -271,7 +269,7 @@ export async function submitClientBooking() {
   const tgMessage = `🔔 <b>Новий онлайн-запис!</b>
 Майстер: <b>${master.name}</b>
 Послуги: ${selectedObjs.map(s => s.title).join(', ')}
-Дата: <b>${newBooking.date} о ${newBooking.time}</b> (тривалість: ${totalDur} хв + ${buffer} хв буфер)
+Дата: <b>${newBooking.date} о ${newBooking.time}</b> (тривалість: ${totalDur} хв)
 Клієнт: ${name} (${phone})
 Сума: ${totalPrice} ₴
 ${comment ? 'Коментар: ' + comment : ''}`;
