@@ -10,6 +10,7 @@ import state from '../state.js';
 
 let activeApiUrl = 'api-v2.php';
 let syncIntervalId = null;
+let silentSaveNoticeShown = false;
 
 /**
  * Знайти робочий URL бекенду без використання кешу
@@ -115,9 +116,23 @@ export async function saveDatabase(tgPayload = null) {
     });
 
     if (res.ok) {
-      state.serverConnected = true;
+      const data = await res.json().catch(() => ({ ok: true }));
+      if (data && data.ok) {
+        state.serverConnected = true;
+      } else {
+        state.serverConnected = false;
+        console.error('Помилка сервера при збереженні:', data);
+      }
     } else {
       state.serverConnected = false;
+      const errData = await res.json().catch(() => null);
+      if (errData && errData.error) {
+        console.error('Помилка запису на сервері:', errData.error);
+        if (state.isAdmin && !silentSaveNoticeShown) {
+          silentSaveNoticeShown = true;
+          alert('⚠️ ' + errData.error + (errData.fix_command ? '\n\nКоманда для VPS:\n' + errData.fix_command : ''));
+        }
+      }
     }
   } catch (e) {
     state.serverConnected = false;

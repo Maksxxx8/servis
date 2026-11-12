@@ -17,6 +17,32 @@ if (!is_dir($dataDir)) {
 
 $dbFile = $dataDir . '/database.json';
 
+// =================== 0. ДІАГНОСТИКА СЕРВЕРА ===================
+// Доступ: api-v2.php?action=diagnostic
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'diagnostic') {
+    header('Content-Type: application/json; charset=utf-8');
+    $phpUser = function_exists('posix_getpwuid') && function_exists('posix_geteuid') 
+        ? posix_getpwuid(posix_geteuid())['name'] 
+        : 'www-data';
+
+    $dirWritable = is_dir($dataDir) && is_writable($dataDir);
+    $parentWritable = is_writable(__DIR__);
+    $fileWritable = file_exists($dbFile) ? is_writable($dbFile) : $dirWritable;
+
+    echo json_encode([
+        "status" => ($dirWritable && $fileWritable) ? "ok" : "permission_error",
+        "php_user" => $phpUser,
+        "base_dir" => __DIR__,
+        "base_dir_writable" => $parentWritable,
+        "data_dir_exists" => is_dir($dataDir),
+        "data_dir_writable" => $dirWritable,
+        "db_file_exists" => file_exists($dbFile),
+        "db_file_writable" => $fileWritable,
+        "fix_command" => "sudo mkdir -p " . __DIR__ . "/data && sudo chown -R {$phpUser}:{$phpUser} " . __DIR__ . "/data && sudo chmod -R 777 " . __DIR__ . "/data"
+    ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    exit;
+}
+
 // =================== 1. iCal СИНХРОНІЗАЦІЯ (.ics СТРІМ) ===================
 // Доступ: api-v2.php?action=ical&master=m1&key=key_m1_svitlana
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'ical') {
@@ -157,7 +183,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             unset($data['_notify_telegram']);
         }
 
-        file_put_contents($dbFile, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        $written = @file_put_contents($dbFile, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        if ($written === false) {
+            http_response_code(500);
+            $err = error_get_last();
+            echo json_encode([
+                "ok" => false,
+                "error" => "Не вдалося зберегти database.json на сервері. Перевірте права доступу до каталогу data/ (потрібно chown www-data:www-data data/ або chmod 777 data/)",
+                "details" => $err ? $err['message'] : "file_put_contents failed"
+            ]);
+            exit;
+        }
         echo json_encode(["ok" => true]);
     } else {
         http_response_code(400);
