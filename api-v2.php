@@ -44,9 +44,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
     $parentWritable = is_writable(__DIR__);
     $dbDiag = $db->getDiagnostic();
 
+    // Діагностика Google Calendar
+    $gcalDiag = null;
+    if (file_exists(__DIR__ . '/google-calendar.php')) {
+        require_once __DIR__ . '/google-calendar.php';
+        $gCal = GoogleCalendarService::getInstance();
+        $gcalDiag = [
+            'configured' => $gCal->isConfigured(),
+            'key_path' => $gCal->getKeyPath(),
+            'key_exists' => file_exists($gCal->getKeyPath()),
+            'key_readable' => is_readable($gCal->getKeyPath()),
+            'service_account_email' => $gCal->getServiceAccountEmail()
+        ];
+    }
+
     echo json_encode([
         "status" => $dirWritable ? "ok" : "permission_error",
         "database" => $dbDiag,
+        "google_calendar" => $gcalDiag,
         "php_user" => $phpUser,
         "base_dir" => __DIR__,
         "base_dir_writable" => $parentWritable,
@@ -54,6 +69,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
         "data_dir_writable" => $dirWritable,
         "fix_command" => "sudo mkdir -p " . __DIR__ . "/data && sudo chown -R {$phpUser}:{$phpUser} " . __DIR__ . "/data && sudo chmod -R 777 " . __DIR__ . "/data"
     ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    exit;
+}
+
+// Тест Google Calendar: api-v2.php?action=test_google_calendar
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'test_google_calendar') {
+    header('Content-Type: application/json; charset=utf-8');
+    require_once __DIR__ . '/google-calendar.php';
+    $customKey = $_GET['key_path'] ?? null;
+    $testCal = $_GET['calendar_id'] ?? null;
+    $gCal = GoogleCalendarService::getInstance($customKey);
+    echo json_encode($gCal->testConnection($testCal), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     exit;
 }
 
@@ -201,6 +227,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Зберігаємо стан в SQL базу даних (в рамках атомарної транзакції)
         $db->saveState($data);
+
+        // Пряма фонова синхронізація з Google Calendar через Service Account (без затримок)
+        if (file_exists(__DIR__ . '/google-calendar.php')) {
+            try {
+                require_once __DIR__ . '/google-calendar.php';
+                $gCal = GoogleCalendarService::getInstance();
+                if ($gCal->isConfigured() && !empty($data['appointments'])) {
+                    $fullState = $db->getState();
+                    foreach ($data['appointments'] as $app) {
+                        $resEventId = $gCal->syncAppointment($app, $fullState);
+                        if ($resEventId && empty($app['googleEventId'])) {
+                            $pdo = $db->getPdo();
+                            $stmtG = $pdo->prepare("UPDATE appointments SET google_event_id = :gid WHERE id = :id");
+                            $stmtG->execute([':gid' => $resEventId, ':id' => $app['id']]);
+                        }
+                    }
+                }
+            } catch (Exception $ge) {
+                error_log("Помилка Google Calendar sync: " . $ge->getMessage());
+            }
+        }
 
         echo json_encode(["ok" => true, "engine" => "SQLite (PDO)"]);
     } catch (Exception $e) {

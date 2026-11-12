@@ -263,6 +263,14 @@
             <label class="block text-xs text-slate-500 mb-1">Telegram Chat ID адміністратора</label>
             <input type="text" id="set-tg-chat-id" placeholder="напр. 123456789" class="w-full border rounded-xl px-3 py-2 font-mono text-xs">
           </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Шлях до JSON-ключа Google Service Account</label>
+            <input type="text" id="set-google-key-path" placeholder="/opt/Keys/servis-calendar-sync-514520-60482c5cddc7.json" class="w-full border rounded-xl px-3 py-2 font-mono text-xs">
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Загальний Google Calendar ID салону (опціонально)</label>
+            <input type="text" id="set-google-cal-id" placeholder="напр. your-salon@gmail.com" class="w-full border rounded-xl px-3 py-2 font-mono text-xs">
+          </div>
         </div>
         <div class="flex flex-wrap items-center gap-3">
           <button data-action="save-salon" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition">
@@ -270,6 +278,9 @@
           </button>
           <button id="btn-test-tg" type="button" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-4 py-2.5 rounded-xl transition flex items-center gap-1.5">
             ✈️ Надіслати тест у Telegram
+          </button>
+          <button id="btn-test-gcal" type="button" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold px-4 py-2.5 rounded-xl transition flex items-center gap-1.5">
+            🗓 Перевірити Google Calendar
           </button>
         </div>
       </div>

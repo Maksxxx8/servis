@@ -19,6 +19,8 @@ export function renderSettingsForm() {
   f('set-admin-pin', state.db.salon.adminPin || '1234');
   f('set-tg-token', state.db.salon.tgBotToken || '');
   f('set-tg-chat-id', state.db.salon.tgChatId || '');
+  f('set-google-key-path', state.db.salon.googleKeyPath || '/opt/Keys/servis-calendar-sync-514520-60482c5cddc7.json');
+  f('set-google-cal-id', state.db.salon.googleCalendarId || '');
 
   // Кнопка тесту Telegram
   const testTgBtn = $('btn-test-tg');
@@ -49,6 +51,42 @@ export function renderSettingsForm() {
     };
   }
 
+  // Кнопка перевірки Google Calendar
+  const testGcalBtn = $('btn-test-gcal');
+  if (testGcalBtn) {
+    testGcalBtn.onclick = async () => {
+      testGcalBtn.disabled = true;
+      testGcalBtn.textContent = '⏳ Перевірка...';
+      try {
+        const keyPath = $('set-google-key-path')?.value.trim() || '';
+        const calId = $('set-google-cal-id')?.value.trim() || '';
+        const url = `api-v2.php?action=test_google_calendar&key_path=${encodeURIComponent(keyPath)}&calendar_id=${encodeURIComponent(calId)}`;
+        const res = await fetch(url);
+        const json = await res.json();
+        if (json.ok) {
+          let msg = `✅ Сервісний аккаунт Google успішно авторизовано!\n\nEmail бота: ${json.service_account_email}`;
+          if (json.calendar_test) {
+            if (json.calendar_test.access === 'granted') {
+              msg += `\n\n🗓 Доступ до календаря "${json.calendar_test.calendar_summary}": НАДАНО (OK)`;
+            } else {
+              msg += `\n\n⚠️ Доступ до календаря: НЕМАЄ ПРАВ\n${json.calendar_test.fix_instruction}`;
+            }
+          } else {
+            msg += `\n\n💡 Скопіюйте email бота '${json.service_account_email}' та додайте його в Google Календар майстра з правами 'Внесення змін до подій'.`;
+          }
+          alert(msg);
+        } else {
+          alert(`❌ Помилка Google Calendar:\n${json.error}\n\n${json.help || ''}`);
+        }
+      } catch (e) {
+        alert('❌ Помилка запиту до сервера: ' + e.message);
+      } finally {
+        testGcalBtn.disabled = false;
+        testGcalBtn.textContent = '🗓 Перевірити Google Calendar';
+      }
+    };
+  }
+
   // Профілі майстрів
   const mastersEl = $('settings-masters-list');
   if (mastersEl) {
@@ -68,8 +106,12 @@ export function renderSettingsForm() {
           <input type="text" id="m-bio-${m.id}" value="${m.bio || ''}" class="w-full border rounded-lg px-2.5 py-1.5 mt-0.5 text-sm">
         </div>
         <div>
-          <label class="text-slate-400">Telegram Chat ID майстра (для особистих сповіщень)</label>
+          <label class="text-slate-400">Telegram Chat ID майстра (для сповіщень)</label>
           <input type="text" id="m-tg-${m.id}" value="${m.tgChatId || ''}" placeholder="напр. 987654321" class="w-full border rounded-lg px-2.5 py-1.5 mt-0.5 text-sm font-mono">
+        </div>
+        <div>
+          <label class="text-slate-400">Google Calendar ID майстра (для Live-Sync)</label>
+          <input type="text" id="m-gcal-${m.id}" value="${m.googleCalendarId || ''}" placeholder="напр. master@gmail.com" class="w-full border rounded-lg px-2.5 py-1.5 mt-0.5 text-sm font-mono">
         </div>
       </div>
     `).join('');
@@ -116,6 +158,8 @@ export async function saveSalonSettings() {
   state.db.salon.adminPin = pinVal;
   state.db.salon.tgBotToken = $('set-tg-token').value.trim();
   state.db.salon.tgChatId = $('set-tg-chat-id') ? $('set-tg-chat-id').value.trim() : '';
+  state.db.salon.googleKeyPath = $('set-google-key-path') ? $('set-google-key-path').value.trim() : '/opt/Keys/servis-calendar-sync-514520-60482c5cddc7.json';
+  state.db.salon.googleCalendarId = $('set-google-cal-id') ? $('set-google-cal-id').value.trim() : '';
   await saveDatabase();
   alert(`Налаштування салону збережено!\nНовий PIN-код для входу майстрів: ${state.db.salon.adminPin}`);
 }
@@ -126,10 +170,12 @@ export async function saveMastersSettings() {
     const roleEl = $(`m-role-${m.id}`);
     const bioEl = $(`m-bio-${m.id}`);
     const tgEl = $(`m-tg-${m.id}`);
+    const gcalEl = $(`m-gcal-${m.id}`);
     if (nameEl) m.name = nameEl.value.trim() || m.name;
     if (roleEl) m.role = roleEl.value.trim() || m.role;
     if (bioEl) m.bio = bioEl.value.trim();
     if (tgEl) m.tgChatId = tgEl.value.trim();
+    if (gcalEl) m.googleCalendarId = gcalEl.value.trim();
   });
   await saveDatabase();
   alert('Профілі майстрів оновлено!');

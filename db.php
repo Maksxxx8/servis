@@ -76,6 +76,7 @@ class CRM_DB {
                 bio TEXT DEFAULT '',
                 avatar VARCHAR(32) DEFAULT '✨',
                 tg_chat_id VARCHAR(64) DEFAULT '',
+                google_calendar_id VARCHAR(255) DEFAULT '',
                 slot_step INT DEFAULT 30,
                 global_buffer INT DEFAULT 15,
                 ical_key VARCHAR(64) DEFAULT '',
@@ -120,6 +121,7 @@ class CRM_DB {
                 price REAL NOT NULL,
                 status VARCHAR(20) DEFAULT 'confirmed',
                 service_ids TEXT,
+                google_event_id VARCHAR(128) DEFAULT NULL,
                 notes TEXT DEFAULT '',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -153,6 +155,22 @@ class CRM_DB {
             );
             CREATE INDEX IF NOT EXISTS idx_tq_status ON telegram_queue(status);
         ");
+
+        // Автоматична міграція існуючих таблиць (якщо вони вже створені на сервері)
+        $this->ensureColumnExists('masters', 'google_calendar_id', 'VARCHAR(255) DEFAULT ""');
+        $this->ensureColumnExists('appointments', 'google_event_id', 'VARCHAR(128) DEFAULT NULL');
+    }
+
+    private function ensureColumnExists(string $table, string $column, string $typeDef): void {
+        try {
+            $cols = $this->pdo->query("PRAGMA table_info($table)")->fetchAll();
+            $names = array_column($cols, 'name');
+            if (!in_array($column, $names)) {
+                $this->pdo->exec("ALTER TABLE $table ADD COLUMN $column $typeDef");
+            }
+        } catch (Exception $e) {
+            error_log("Помилка додавання колонки $column до $table: " . $e->getMessage());
+        }
     }
 
     private function isTablesEmpty(): bool {
@@ -286,7 +304,9 @@ class CRM_DB {
             'workEnd' => 20,
             'adminPin' => '1234',
             'tgBotToken' => '',
-            'tgChatId' => ''
+            'tgChatId' => '',
+            'googleKeyPath' => '/opt/Keys/servis-calendar-sync-514520-60482c5cddc7.json',
+            'googleCalendarId' => ''
         ];
         foreach ($salonRows as $r) {
             $k = $r['key'];
@@ -309,6 +329,7 @@ class CRM_DB {
                 'bio' => $m['bio'] ?? '',
                 'avatar' => $m['avatar'] ?? '✨',
                 'tgChatId' => $m['tg_chat_id'] ?? '',
+                'googleCalendarId' => $m['google_calendar_id'] ?? '',
                 'slotStep' => (int)($m['slot_step'] ?? 30),
                 'globalBuffer' => (int)($m['global_buffer'] ?? 15),
                 'icalKey' => $m['ical_key'] ?? ('key_' . $m['id']),
@@ -347,6 +368,7 @@ class CRM_DB {
                 'clientName' => $a['client_name'],
                 'clientPhone' => $a['client_phone'],
                 'status' => $a['status'] ?? 'confirmed',
+                'googleEventId' => $a['google_event_id'] ?? null,
                 'notes' => $a['notes'] ?? ''
             ];
         }
@@ -392,8 +414,8 @@ class CRM_DB {
             if (isset($data['masters']) && is_array($data['masters'])) {
                 $stmt = $this->pdo->prepare("
                     INSERT OR REPLACE INTO masters 
-                    (id, name, role, bio, avatar, tg_chat_id, slot_step, global_buffer, ical_key, weekly_schedule, date_overrides, is_active, sort_order)
-                    VALUES (:id, :name, :role, :bio, :avatar, :tg_chat_id, :slot_step, :global_buffer, :ical_key, :weekly_schedule, :date_overrides, 1, :sort_order)
+                    (id, name, role, bio, avatar, tg_chat_id, google_calendar_id, slot_step, global_buffer, ical_key, weekly_schedule, date_overrides, is_active, sort_order)
+                    VALUES (:id, :name, :role, :bio, :avatar, :tg_chat_id, :google_calendar_id, :slot_step, :global_buffer, :ical_key, :weekly_schedule, :date_overrides, 1, :sort_order)
                 ");
 
                 $sort = 0;
@@ -408,6 +430,7 @@ class CRM_DB {
                         ':bio' => $m['bio'] ?? '',
                         ':avatar' => $m['avatar'] ?? '✨',
                         ':tg_chat_id' => $m['tgChatId'] ?? '',
+                        ':google_calendar_id' => $m['googleCalendarId'] ?? '',
                         ':slot_step' => (int)($m['slotStep'] ?? 30),
                         ':global_buffer' => (int)($m['globalBuffer'] ?? 15),
                         ':ical_key' => $m['icalKey'] ?? ('key_' . $m['id']),
@@ -450,8 +473,8 @@ class CRM_DB {
             if (isset($data['appointments']) && is_array($data['appointments'])) {
                 $stmtApp = $this->pdo->prepare("
                     INSERT OR REPLACE INTO appointments 
-                    (id, master_id, client_id, client_name, client_phone, date, time, duration, buffer_time, price, status, service_ids, notes, updated_at)
-                    VALUES (:id, :master_id, :client_id, :client_name, :client_phone, :date, :time, :duration, :buffer_time, :price, :status, :service_ids, :notes, CURRENT_TIMESTAMP)
+                    (id, master_id, client_id, client_name, client_phone, date, time, duration, buffer_time, price, status, service_ids, google_event_id, notes, updated_at)
+                    VALUES (:id, :master_id, :client_id, :client_name, :client_phone, :date, :time, :duration, :buffer_time, :price, :status, :service_ids, :google_event_id, :notes, CURRENT_TIMESTAMP)
                 ");
 
                 $stmtClient = $this->pdo->prepare("
@@ -490,6 +513,7 @@ class CRM_DB {
                         ':price' => (float)($a['price'] ?? 0),
                         ':status' => $a['status'] ?? 'confirmed',
                         ':service_ids' => json_encode($a['serviceIds'] ?? [], JSON_UNESCAPED_UNICODE),
+                        ':google_event_id' => $a['googleEventId'] ?? ($a['google_event_id'] ?? null),
                         ':notes' => $a['notes'] ?? ''
                     ]);
                 }
