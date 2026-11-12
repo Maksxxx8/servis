@@ -260,6 +260,44 @@ class GoogleCalendarService {
     }
 
     /**
+     * Повна примусова синхронізація всіх активних записів із Google Календарем
+     */
+    public function syncAllAppointments(): array {
+        $db = CRM_DB::getInstance();
+        $fullState = $db->getState();
+        $results = ['ok' => true, 'synced' => 0, 'failed' => 0, 'details' => []];
+
+        if (!$this->isConfigured()) {
+            return ['ok' => false, 'error' => 'Сервісний аккаунт не налаштовано'];
+        }
+
+        foreach ($fullState['appointments'] as $app) {
+            if (($app['status'] ?? '') === 'cancelled') continue;
+
+            $eventId = $this->syncAppointment($app, $fullState);
+            $cName = $app['clientName'] ?? ($app['client_name'] ?? 'Клієнт');
+            $date = $app['date'] ?? '';
+            $time = $app['time'] ?? '';
+
+            if ($eventId) {
+                $results['synced']++;
+                $results['details'][] = "✅ {$cName} ({$date} {$time}) — успішно синхронізовано в Google";
+
+                if (empty($app['googleEventId'])) {
+                    $pdo = $db->getPdo();
+                    $stmt = $pdo->prepare("UPDATE appointments SET google_event_id = :gid WHERE id = :id");
+                    $stmt->execute([':gid' => $eventId, ':id' => $app['id']]);
+                }
+            } else {
+                $results['failed']++;
+                $results['details'][] = "⚠️ {$cName} ({$date} {$time}) — не вдалося надіслати (перевірте доступ до календаря)";
+            }
+        }
+
+        return $results;
+    }
+
+    /**
      * Тестування підключення до Google Calendar
      */
     public function testConnection(?string $testCalendarId = null): array {

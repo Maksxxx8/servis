@@ -59,20 +59,32 @@ export function renderSettingsForm() {
       testGcalBtn.textContent = '⏳ Перевірка...';
       try {
         const keyPath = $('set-google-key-path')?.value.trim() || '';
-        const calId = $('set-google-cal-id')?.value.trim() || '';
+        let calId = $('set-google-cal-id')?.value.trim() || '';
+
+        // Якщо загальний календар порожній, беремо календар першого заповненого майстра
+        if (!calId) {
+          for (const m of state.db.masters) {
+            const mCal = $(`m-gcal-${m.id}`)?.value.trim() || m.googleCalendarId;
+            if (mCal) {
+              calId = mCal;
+              break;
+            }
+          }
+        }
+
         const url = `api-v2.php?action=test_google_calendar&key_path=${encodeURIComponent(keyPath)}&calendar_id=${encodeURIComponent(calId)}`;
         const res = await fetch(url);
         const json = await res.json();
         if (json.ok) {
-          let msg = `✅ Сервісний аккаунт Google успішно авторизовано!\n\nEmail бота: ${json.service_account_email}`;
+          let msg = `✅ Сервісний аккаунт Google успішно авторизовано!\n\nEmail робота: ${json.service_account_email}`;
           if (json.calendar_test) {
             if (json.calendar_test.access === 'granted') {
-              msg += `\n\n🗓 Доступ до календаря "${json.calendar_test.calendar_summary}": НАДАНО (OK)`;
+              msg += `\n\n🗓 Доступ до календаря "${json.calendar_test.calendar_summary}": НАДАНО (OK)\nЗаписи будуть автоматично з'являтися у цьому календарі!`;
             } else {
-              msg += `\n\n⚠️ Доступ до календаря: НЕМАЄ ПРАВ\n${json.calendar_test.fix_instruction}`;
+              msg += `\n\n⚠️ Доступ до календаря "${calId}": ВІДХИЛЕНО (${json.calendar_test.http_code})\n\nПричина: ${json.calendar_test.error}\n\nЩо робити:\n${json.calendar_test.fix_instruction}`;
             }
           } else {
-            msg += `\n\n💡 Скопіюйте email бота '${json.service_account_email}' та додайте його в Google Календар майстра з правами 'Внесення змін до подій'.`;
+            msg += `\n\n💡 Вкажіть Calendar ID майстра та додайте email робота в Google Календар з правами 'Внесення змін до подій'.`;
           }
           alert(msg);
         } else {
@@ -82,7 +94,30 @@ export function renderSettingsForm() {
         alert('❌ Помилка запиту до сервера: ' + e.message);
       } finally {
         testGcalBtn.disabled = false;
-        testGcalBtn.textContent = '🗓 Перевірити Google Calendar';
+        testGcalBtn.textContent = '🗓 Перевірити доступ Google Calendar';
+      }
+    };
+  }
+
+  // Кнопка примусової відправки записів у Google Calendar
+  const syncGcalBtn = $('btn-sync-gcal');
+  if (syncGcalBtn) {
+    syncGcalBtn.onclick = async () => {
+      syncGcalBtn.disabled = true;
+      syncGcalBtn.textContent = '⏳ Синхронізація...';
+      try {
+        const res = await fetch('api-v2.php?action=sync_all_google_calendar');
+        const json = await res.json();
+        if (json.ok) {
+          alert(`✅ Результат синхронізації:\n\nУспішно відправлено: ${json.synced}\nПомилок/без доступу: ${json.failed}\n\n${json.details.join('\n')}`);
+        } else {
+          alert('❌ Помилка: ' + (json.error || 'не вдалося синхронізувати'));
+        }
+      } catch (e) {
+        alert('❌ Помилка запиту: ' + e.message);
+      } finally {
+        syncGcalBtn.disabled = false;
+        syncGcalBtn.textContent = '🔄 Відправити записи в Google';
       }
     };
   }

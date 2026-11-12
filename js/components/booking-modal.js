@@ -114,6 +114,8 @@ export async function saveBookingFromModal() {
   const duration = $('modal-booking-duration') ? Number($('modal-booking-duration').value) : (srv ? Number(srv.duration) : 60);
   const bufferTime = $('modal-booking-buffer') ? Number($('modal-booking-buffer').value) : (srv && srv.bufferTime !== undefined ? Number(srv.bufferTime) : 15);
 
+  const existingApp = id ? state.db.appointments.find(a => a.id === id) : null;
+
   const entry = {
     id: id || ('a' + Date.now()),
     masterId,
@@ -126,6 +128,7 @@ export async function saveBookingFromModal() {
     clientName: $('modal-booking-client').value.trim() || 'Клієнт',
     clientPhone: $('modal-booking-phone').value.trim(),
     status: $('modal-booking-status').value,
+    googleEventId: existingApp?.googleEventId || currentModalAppointment?.googleEventId || null,
     notes: $('modal-booking-notes').value.trim()
   };
 

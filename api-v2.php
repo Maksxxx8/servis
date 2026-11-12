@@ -83,6 +83,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
     exit;
 }
 
+// Примусова синхронізація всіх записів: api-v2.php?action=sync_all_google_calendar
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'sync_all_google_calendar') {
+    header('Content-Type: application/json; charset=utf-8');
+    require_once __DIR__ . '/google-calendar.php';
+    $gCal = GoogleCalendarService::getInstance();
+    echo json_encode($gCal->syncAllAppointments(), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    exit;
+}
+
 // =================== 1. iCal СИНХРОНІЗАЦІЯ (.ics СТРІМ) ===================
 // Доступ: api-v2.php?action=ical&master=m1&key=key_m1_svitlana
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'ical') {
@@ -225,10 +234,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             unset($data['_notify_telegram']);
         }
 
+        // 1. Google Calendar: видаляємо з календаря записи, які видалені або скасовані
+        if (file_exists(__DIR__ . '/google-calendar.php')) {
+            try {
+                require_once __DIR__ . '/google-calendar.php';
+                $gCal = GoogleCalendarService::getInstance();
+                if ($gCal->isConfigured()) {
+                    $fullState = $db->getState();
+                    $existingApps = $fullState['appointments'] ?? [];
+
+                    $incomingIds = [];
+                    $incomingCancelled = [];
+                    if (!empty($data['appointments'])) {
+                        foreach ($data['appointments'] as $inApp) {
+                            if (!empty($inApp['id'])) {
+                                $incomingIds[] = $inApp['id'];
+                                if (($inApp['status'] ?? '') === 'cancelled') {
+                                    $incomingCancelled[] = $inApp['id'];
+                                }
+                            }
+                        }
+                    }
+
+                    foreach ($existingApps as $oldApp) {
+                        $eventId = $oldApp['googleEventId'] ?? null;
+                        if (empty($eventId)) continue;
+
+                        $isDeleted = !in_array($oldApp['id'], $incomingIds);
+                        $isCancelled = in_array($oldApp['id'], $incomingCancelled);
+
+                        if ($isDeleted || $isCancelled) {
+                            $mId = $oldApp['masterId'];
+                            $calId = null;
+                            foreach ($fullState['masters'] as $m) {
+                                if ($m['id'] === $mId && !empty($m['googleCalendarId'])) {
+                                    $calId = trim($m['googleCalendarId']);
+                                    break;
+                                }
+                            }
+                            if (empty($calId)) {
+                                $calId = trim($fullState['salon']['googleCalendarId'] ?? '');
+                            }
+                            if (!empty($calId)) {
+                                $gCal->deleteEvent($calId, $eventId);
+                            }
+                        }
+                    }
+                }
+            } catch (Exception $ge) {
+                error_log("Помилка видалення з Google Calendar: " . $ge->getMessage());
+            }
+        }
+
         // Зберігаємо стан в SQL базу даних (в рамках атомарної транзакції)
         $db->saveState($data);
 
-        // Пряма фонова синхронізація з Google Calendar через Service Account (без затримок)
+        // 2. Google Calendar: створення нових та оновлення перенесених подій
         if (file_exists(__DIR__ . '/google-calendar.php')) {
             try {
                 require_once __DIR__ . '/google-calendar.php';
@@ -236,8 +297,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($gCal->isConfigured() && !empty($data['appointments'])) {
                     $fullState = $db->getState();
                     foreach ($data['appointments'] as $app) {
+                        if (($app['status'] ?? '') === 'cancelled') continue;
+
                         $resEventId = $gCal->syncAppointment($app, $fullState);
-                        if ($resEventId && empty($app['googleEventId'])) {
+                        if ($resEventId && (empty($app['googleEventId']) || $app['googleEventId'] !== $resEventId)) {
                             $pdo = $db->getPdo();
                             $stmtG = $pdo->prepare("UPDATE appointments SET google_event_id = :gid WHERE id = :id");
                             $stmtG->execute([':gid' => $resEventId, ':id' => $app['id']]);
@@ -245,7 +308,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
             } catch (Exception $ge) {
-                error_log("Помилка Google Calendar sync: " . $ge->getMessage());
+                error_log("Помилка оновлення Google Calendar: " . $ge->getMessage());
             }
         }
 
