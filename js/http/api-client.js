@@ -119,6 +119,20 @@ export async function saveDatabase(tgPayload = null) {
       const data = await res.json().catch(() => ({ ok: true }));
       if (data && data.ok) {
         state.serverConnected = true;
+
+        // Оновлюємо googleEventId у клієнтському стейті без перезавантаження сторінки
+        if (data.google_event_ids && Array.isArray(state.db.appointments)) {
+          let updatedGids = false;
+          for (const app of state.db.appointments) {
+            if (data.google_event_ids[app.id] && app.googleEventId !== data.google_event_ids[app.id]) {
+              app.googleEventId = data.google_event_ids[app.id];
+              updatedGids = true;
+            }
+          }
+          if (updatedGids) {
+            localStorage.setItem('salon_crm_db_uk', JSON.stringify(state.db));
+          }
+        }
       } else {
         state.serverConnected = false;
         console.error('Помилка сервера при збереженні:', data);

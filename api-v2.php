@@ -234,7 +234,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             unset($data['_notify_telegram']);
         }
 
-        // 1. Google Calendar: видаляємо з календаря записи, які видалені або скасовані
+        // 1. Google Calendar: видаляємо з календаря записи, які видалені, скасовані або змінили майстра
         if (file_exists(__DIR__ . '/google-calendar.php')) {
             try {
                 require_once __DIR__ . '/google-calendar.php';
@@ -263,7 +263,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $isDeleted = !in_array($oldApp['id'], $incomingIds);
                         $isCancelled = in_array($oldApp['id'], $incomingCancelled);
 
-                        if ($isDeleted || $isCancelled) {
+                        // Перевіряємо, чи не змінився майстер у записі
+                        $masterChanged = false;
+                        if (!empty($data['appointments'])) {
+                            foreach ($data['appointments'] as $inApp) {
+                                if (($inApp['id'] ?? '') === $oldApp['id'] && !empty($inApp['masterId']) && $inApp['masterId'] !== $oldApp['masterId']) {
+                                    $masterChanged = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if ($isDeleted || $isCancelled || $masterChanged) {
                             $mId = $oldApp['masterId'];
                             $calId = null;
                             foreach ($fullState['masters'] as $m) {
@@ -278,6 +289,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             if (!empty($calId)) {
                                 $gCal->deleteEvent($calId, $eventId);
                             }
+
+                            // Якщо майстер змінився, скидаємо google_event_id у вхідних даних та базі,
+                            // щоб подія коректно створилася в календарі нового майстра
+                            if ($masterChanged) {
+                                foreach ($data['appointments'] as &$inApp) {
+                                    if (($inApp['id'] ?? '') === $oldApp['id']) {
+                                        $inApp['googleEventId'] = null;
+                                        $inApp['google_event_id'] = null;
+                                    }
+                                }
+                                unset($inApp);
+                                try {
+                                    $db->getPdo()->prepare("UPDATE appointments SET google_event_id = NULL WHERE id = :id")->execute([':id' => $oldApp['id']]);
+                                } catch (Exception $e) {}
+                            }
                         }
                     }
                 }
@@ -290,20 +316,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $db->saveState($data);
 
         // 2. Google Calendar: створення нових та оновлення перенесених подій
+        $googleEventIdsMap = [];
         if (file_exists(__DIR__ . '/google-calendar.php')) {
             try {
                 require_once __DIR__ . '/google-calendar.php';
                 $gCal = GoogleCalendarService::getInstance();
-                if ($gCal->isConfigured() && !empty($data['appointments'])) {
+                if ($gCal->isConfigured()) {
+                    // Беремо актуальний стан із SQLite, де google_event_id збережено та валідовано
                     $fullState = $db->getState();
-                    foreach ($data['appointments'] as $app) {
-                        if (($app['status'] ?? '') === 'cancelled') continue;
+                    if (!empty($fullState['appointments'])) {
+                        foreach ($fullState['appointments'] as $app) {
+                            if (($app['status'] ?? '') === 'cancelled') continue;
 
-                        $resEventId = $gCal->syncAppointment($app, $fullState);
-                        if ($resEventId && (empty($app['googleEventId']) || $app['googleEventId'] !== $resEventId)) {
-                            $pdo = $db->getPdo();
-                            $stmtG = $pdo->prepare("UPDATE appointments SET google_event_id = :gid WHERE id = :id");
-                            $stmtG->execute([':gid' => $resEventId, ':id' => $app['id']]);
+                            $resEventId = $gCal->syncAppointment($app, $fullState);
+                            if ($resEventId) {
+                                $googleEventIdsMap[$app['id']] = $resEventId;
+                                if (empty($app['googleEventId']) || $app['googleEventId'] !== $resEventId) {
+                                    $pdo = $db->getPdo();
+                                    $stmtG = $pdo->prepare("UPDATE appointments SET google_event_id = :gid WHERE id = :id");
+                                    $stmtG->execute([':gid' => $resEventId, ':id' => $app['id']]);
+                                }
+                            }
                         }
                     }
                 }
@@ -312,7 +345,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        echo json_encode(["ok" => true, "engine" => "SQLite (PDO)"]);
+        echo json_encode([
+            "ok" => true,
+            "engine" => "SQLite (PDO)",
+            "google_event_ids" => $googleEventIdsMap
+        ], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         http_response_code(500);
         echo json_encode([

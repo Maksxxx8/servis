@@ -173,6 +173,10 @@ class GoogleCalendarService {
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
+        if ($code !== 200) {
+            error_log("Google Calendar: Помилка оновлення події {$eventId} в календарі {$calendarId} (HTTP {$code}): {$res}");
+        }
+
         return $code === 200;
     }
 
@@ -253,9 +257,11 @@ class GoogleCalendarService {
         if (!empty($eventId)) {
             $updated = $this->updateEvent($calendarId, $eventId, $app, $masterName, $servicesText);
             if ($updated) return $eventId;
+            // Якщо оновлення не вдалося (подію видалили вручну в Google Календарі або 404), створюємо нову
+            error_log("Google Calendar: Не вдалося оновити подію {$eventId} в {$calendarId}, створюємо нову подію");
         }
 
-        // Якщо події ще немає — створюємо нову
+        // Якщо події ще немає або стара була видалена в Google — створюємо нову
         return $this->createEvent($calendarId, $app, $masterName, $servicesText);
     }
 
@@ -382,16 +388,22 @@ class GoogleCalendarService {
         $price = $app['price'] ?? 0;
         $notes = $app['notes'] ?? '';
 
-        $startParts = explode(':', $time);
-        $startH = (int)($startParts[0] ?? 10);
-        $startM = (int)($startParts[1] ?? 0);
-
-        $endMinutes = ($startH * 60) + $startM + $duration;
-        $endH = str_pad((string)floor($endMinutes / 60), 2, '0', STR_PAD_LEFT);
-        $endM = str_pad((string)($endMinutes % 60), 2, '0', STR_PAD_LEFT);
-
-        $startIso = sprintf("%sT%02d:%02d:00+02:00", $date, $startH, $startM);
-        $endIso = sprintf("%sT%s:%s:00+02:00", $date, $endH, $endM);
+        try {
+            $tz = new DateTimeZone('Europe/Kyiv');
+            $startDt = new DateTime("{$date} {$time}", $tz);
+            $endDt = (clone $startDt)->modify("+{$duration} minutes");
+            $startIso = $startDt->format(DateTime::RFC3339);
+            $endIso = $endDt->format(DateTime::RFC3339);
+        } catch (Exception $e) {
+            $startParts = explode(':', $time);
+            $startH = (int)($startParts[0] ?? 10);
+            $startM = (int)($startParts[1] ?? 0);
+            $endMinutes = ($startH * 60) + $startM + $duration;
+            $endH = str_pad((string)floor($endMinutes / 60), 2, '0', STR_PAD_LEFT);
+            $endM = str_pad((string)($endMinutes % 60), 2, '0', STR_PAD_LEFT);
+            $startIso = sprintf("%sT%02d:%02d:00+02:00", $date, $startH, $startM);
+            $endIso = sprintf("%sT%s:%s:00+02:00", $date, $endH, $endM);
+        }
 
         $desc = "Клієнт: {$cName}\n" .
                 "Телефон: {$cPhone}\n" .

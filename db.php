@@ -471,6 +471,17 @@ class CRM_DB {
 
             // 4. Записи (Appointments) & Клієнти
             if (isset($data['appointments']) && is_array($data['appointments'])) {
+                // Отримуємо існуючі прив'язки до Google Calendar, щоб не втратити google_event_id при оновленні записів
+                $existingGids = [];
+                try {
+                    $rowsGid = $this->pdo->query("SELECT id, google_event_id FROM appointments WHERE google_event_id IS NOT NULL AND google_event_id != ''")->fetchAll();
+                    foreach ($rowsGid as $rg) {
+                        $existingGids[$rg['id']] = $rg['google_event_id'];
+                    }
+                } catch (Exception $e) {
+                    // таблиця ще може бути не ініціалізована
+                }
+
                 $stmtApp = $this->pdo->prepare("
                     INSERT OR REPLACE INTO appointments 
                     (id, master_id, client_id, client_name, client_phone, date, time, duration, buffer_time, price, status, service_ids, google_event_id, notes, updated_at)
@@ -500,6 +511,10 @@ class CRM_DB {
                         ]);
                     }
 
+                    $incomingGid = $a['googleEventId'] ?? ($a['google_event_id'] ?? null);
+                    // Захист від затирання: якщо клієнт не надіслав googleEventId, зберігаємо існуючий із бази
+                    $finalGid = !empty($incomingGid) ? $incomingGid : ($existingGids[$a['id']] ?? null);
+
                     $stmtApp->execute([
                         ':id' => $a['id'],
                         ':master_id' => $a['masterId'] ?? '',
@@ -513,7 +528,7 @@ class CRM_DB {
                         ':price' => (float)($a['price'] ?? 0),
                         ':status' => $a['status'] ?? 'confirmed',
                         ':service_ids' => json_encode($a['serviceIds'] ?? [], JSON_UNESCAPED_UNICODE),
-                        ':google_event_id' => $a['googleEventId'] ?? ($a['google_event_id'] ?? null),
+                        ':google_event_id' => $finalGid,
                         ':notes' => $a['notes'] ?? ''
                     ]);
                 }
