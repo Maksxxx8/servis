@@ -83,6 +83,98 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
     exit;
 }
 
+// Верифікація запису клієнта через Email: api-v2.php?action=verify_booking&token=...
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'verify_booking') {
+    $token = trim($_GET['token'] ?? '');
+    if (empty($token)) {
+        die("Помилка: недійсне або відсутнє посилання для підтвердження.");
+    }
+
+    $pdo = $db->getPdo();
+    $stmt = $pdo->prepare("SELECT * FROM appointments WHERE verification_token = :token");
+    $stmt->execute([':token' => $token]);
+    $app = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$app) {
+        die("Помилка: запис за цим посиланням не знайдено або термін його дії закінчився.");
+    }
+
+    // Оновлюємо статус запису на підтверджений
+    $stmtUpdate = $pdo->prepare("UPDATE appointments SET is_verified = 1, status = 'confirmed' WHERE id = :id");
+    $stmtUpdate->execute([':id' => $app['id']]);
+
+    // Синхронізуємо з Google Calendar
+    if (file_exists(__DIR__ . '/google-calendar.php')) {
+        try {
+            require_once __DIR__ . '/google-calendar.php';
+            $gCal = GoogleCalendarService::getInstance();
+            if ($gCal->isConfigured()) {
+                $fullState = $db->getState();
+                $updatedApp = null;
+                foreach ($fullState['appointments'] as $fa) {
+                    if ($fa['id'] === $app['id']) { $updatedApp = $fa; break; }
+                }
+                if ($updatedApp) {
+                    $resGid = $gCal->syncAppointment($updatedApp, $fullState);
+                    if ($resGid) {
+                        $pdo->prepare("UPDATE appointments SET google_event_id = :gid WHERE id = :id")->execute([':gid' => $resGid, ':id' => $app['id']]);
+                    }
+                }
+            }
+        } catch (Exception $e) {}
+    }
+
+    // Сповіщення в Telegram майстру та салону
+    $fullState = $db->getState();
+    $tokenBot = $fullState['salon']['tgBotToken'] ?? '';
+    if (!empty($tokenBot)) {
+        $mName = 'Майстер';
+        $chatId = $fullState['salon']['tgChatId'] ?? '';
+        foreach ($fullState['masters'] as $m) {
+            if ($m['id'] === $app['master_id']) {
+                $mName = $m['name'];
+                if (!empty($m['tg_chat_id'])) $chatId = $m['tg_chat_id'];
+                break;
+            }
+        }
+        $cName = htmlspecialchars($app['client_name']);
+        $cPhone = htmlspecialchars($app['client_phone']);
+        $cEmail = htmlspecialchars($app['client_email']);
+        $date = $app['date'];
+        $time = $app['time'];
+        $msg = "✅ <b>Клієнт підтвердив запис через Email!</b>\nКлієнт: <b>{$cName}</b> ({$cPhone})\nEmail: {$cEmail}\nМайстер: <b>{$mName}</b>\nДата: <b>{$date} о {$time}</b>";
+        CRM_DB::sendTelegram($tokenBot, (string)$chatId, $msg);
+    }
+
+    // Показуємо красиву сторінку підтвердження
+    header('Content-Type: text/html; charset=utf-8');
+    echo "<!DOCTYPE html>
+    <html lang='uk'>
+    <head>
+        <meta charset='UTF-8'>
+        <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+        <title>Запис підтверджено | Beauty Studio</title>
+        <script src='https://cdn.tailwindcss.com'></script>
+    </head>
+    <body class='bg-slate-50 min-h-screen flex items-center justify-center p-4 font-sans text-slate-800'>
+        <div class='bg-white max-w-md w-full rounded-3xl p-8 shadow-xl border border-slate-100 text-center space-y-4'>
+            <div class='w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-4xl mx-auto'>✓</div>
+            <h1 class='text-2xl font-bold text-slate-900'>Ваш запис підтверджено!</h1>
+            <p class='text-sm text-slate-600'>Дякуємо, <b>" . htmlspecialchars($app['client_name']) . "</b>! Ваша пошта успішно верифікована, а візит заброньовано.</p>
+            <div class='bg-slate-50 rounded-2xl p-4 text-xs space-y-1.5 text-left border border-slate-100'>
+                <div>📅 <b>Дата:</b> {$app['date']} о {$app['time']}</div>
+                <div>⏱️ <b>Тривалість:</b> {$app['duration']} хв</div>
+                <div>💰 <b>Вартість:</b> {$app['price']} ₴</div>
+            </div>
+            <div class='pt-2'>
+                <a href='./' class='inline-block w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition shadow-sm'>На головну</a>
+            </div>
+        </div>
+    </body>
+    </html>";
+    exit;
+}
+
 // Примусова синхронізація всіх записів: api-v2.php?action=sync_all_google_calendar
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'sync_all_google_calendar') {
     header('Content-Type: application/json; charset=utf-8');
@@ -234,6 +326,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             unset($data['_notify_telegram']);
         }
 
+        // 0. Відправка листа верифікації для клієнтського запису (якщо передано _send_verification_email)
+        $verificationData = null;
+        if (!empty($data['_send_verification_email'])) {
+            $vEmail = trim($data['_send_verification_email']['email'] ?? '');
+            $vAppId = trim($data['_send_verification_email']['appointmentId'] ?? '');
+            $vClientName = trim($data['_send_verification_email']['clientName'] ?? 'Клієнт');
+            $vMasterName = trim($data['_send_verification_email']['masterName'] ?? 'Майстер');
+            $vServices = trim($data['_send_verification_email']['services'] ?? 'Послуга салону');
+            $vDate = trim($data['_send_verification_email']['date'] ?? '');
+            $vTime = trim($data['_send_verification_email']['time'] ?? '');
+
+            if (!empty($vEmail) && !empty($vAppId)) {
+                $vToken = bin2hex(random_bytes(16));
+                
+                // Встановлюємо токен для створеного запису
+                if (!empty($data['appointments'])) {
+                    foreach ($data['appointments'] as &$ap) {
+                        if (($ap['id'] ?? '') === $vAppId) {
+                            $ap['verificationToken'] = $vToken;
+                            $ap['isVerified'] = 0;
+                            break;
+                        }
+                    }
+                    unset($ap);
+                }
+
+                $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' || ($_SERVER['SERVER_PORT'] ?? 80) == 443) ? "https://" : "http://";
+                $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+                $scriptPath = $_SERVER['SCRIPT_NAME'] ?? '/api-v2.php';
+                $verifyUrl = "{$protocol}{$host}{$scriptPath}?action=verify_booking&token={$vToken}";
+
+                $subject = "=?UTF-8?B?" . base64_encode("Підтвердження запису в Beauty Studio") . "?=";
+                $htmlBody = "
+                <div style='font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;'>
+                    <h2 style='color: #4f46e5; margin-top: 0;'>Beauty Studio</h2>
+                    <p style='font-size: 15px;'>Вітаємо, <b>" . htmlspecialchars($vClientName) . "</b>!</p>
+                    <p style='font-size: 14px;'>Ви створили онлайн-запис на візит:</p>
+                    <div style='background-color: #f8fafc; padding: 14px; border-radius: 12px; margin: 16px 0; font-size: 14px; border: 1px solid #f1f5f9;'>
+                        <p style='margin: 4px 0;'>👤 <b>Майстер:</b> " . htmlspecialchars($vMasterName) . "</p>
+                        <p style='margin: 4px 0;'>✨ <b>Послуга:</b> " . htmlspecialchars($vServices) . "</p>
+                        <p style='margin: 4px 0;'>📅 <b>Дата та час:</b> " . htmlspecialchars($vDate) . " о " . htmlspecialchars($vTime) . "</p>
+                    </div>
+                    <p style='font-size: 14px;'>Для завершення та підтвердження запису, будь ласка, натисніть кнопку:</p>
+                    <div style='text-align: center; margin: 24px 0;'>
+                        <a href='{$verifyUrl}' style='background-color: #4f46e5; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 12px; font-weight: bold; font-size: 15px; display: inline-block;'>Підтвердити мій запис</a>
+                    </div>
+                    <p style='font-size: 12px; color: #64748b;'>Або скопіюйте посилання у браузер:<br><a href='{$verifyUrl}' style='color: #4f46e5;'>{$verifyUrl}</a></p>
+                </div>";
+
+                $headers = "MIME-Version: 1.0\r\n";
+                $headers .= "Content-type: text/html; charset=utf-8\r\n";
+                $headers .= "From: Beauty Studio <noreply@" . ($_SERVER['SERVER_NAME'] ?? 'beauty.studio') . ">\r\n";
+
+                $mailSent = @mail($vEmail, $subject, $htmlBody, $headers);
+                $verificationData = [
+                    'token' => $vToken,
+                    'verify_url' => $verifyUrl,
+                    'email_sent' => (bool)$mailSent
+                ];
+            }
+            unset($data['_send_verification_email']);
+        }
+
         // 1. Google Calendar: видаляємо з календаря записи, які видалені, скасовані або змінили майстра
         if (file_exists(__DIR__ . '/google-calendar.php')) {
             try {
@@ -348,7 +503,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         echo json_encode([
             "ok" => true,
             "engine" => "SQLite (PDO)",
-            "google_event_ids" => $googleEventIdsMap
+            "google_event_ids" => $googleEventIdsMap,
+            "verification" => $verificationData
         ], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         http_response_code(500);

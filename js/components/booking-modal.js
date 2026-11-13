@@ -7,7 +7,8 @@ import state from '../state.js';
 import { $, show, hide } from '../utils/dom.js';
 import { saveDatabase } from '../http/api-client.js';
 import { todayStr } from '../config.js';
-import { downloadIcsFile, generateGoogleCalendarUrl } from '../utils/schedule.js';
+import { timeToMin, minToTime } from '../utils/time.js';
+import { downloadIcsFile, generateGoogleCalendarUrl, getMasterDaySchedule } from '../utils/schedule.js';
 
 let currentModalAppointment = null;
 
@@ -131,6 +132,44 @@ export async function saveBookingFromModal() {
     googleEventId: existingApp?.googleEventId || currentModalAppointment?.googleEventId || null,
     notes: $('modal-booking-notes').value.trim()
   };
+
+  const newStart = timeToMin(entry.time);
+  const newEnd = newStart + Number(entry.duration);
+
+  // 1. Захист від накладання та дублювання: перевіряємо перетин з іншими записами майстра
+  const conflictingApp = state.db.appointments.find(a => {
+    if (a.id === entry.id || a.masterId !== entry.masterId || a.date !== entry.date || a.status === 'cancelled') {
+      return false;
+    }
+    const aStart = timeToMin(a.time);
+    const aEnd = aStart + Number(a.duration || 60);
+    return (newStart < aEnd && newEnd > aStart);
+  });
+
+  if (conflictingApp) {
+    const cEnd = timeToMin(conflictingApp.time) + Number(conflictingApp.duration || 60);
+    alert(`❌ Неможливо зберегти запис на ${entry.time} (${entry.duration} хв)!\n\nЧас перетинається з іншим існуючим записом:\nКлієнт: ${conflictingApp.clientName} (${conflictingApp.time}–${minToTime(cEnd)}).\n\nБудь ласка, оберіть інший час або скоротіть тривалість.`);
+    return;
+  }
+
+  // 2. Перевірка перетину з обідньою перервою майстра
+  const master = state.db.masters.find(m => m.id === entry.masterId);
+  if (master) {
+    const daySched = getMasterDaySchedule(master, entry.date);
+    const lunchBreak = (daySched?.regularBreaks || []).find(b => {
+      const bStart = timeToMin(b.start);
+      const bEnd = timeToMin(b.end);
+      return (newStart < bEnd && newEnd > bStart);
+    });
+
+    if (lunchBreak) {
+      const confirmLunch = confirm(`⚠️ Обраний час (${entry.time}–${minToTime(newEnd)}) перетинається з обідом майстра (${lunchBreak.start}–${lunchBreak.end}, "${lunchBreak.name || 'Обід'}").\n\nВи дійсно бажаєте замінити обід цим записом?`);
+      if (!confirmLunch) {
+        return; // Скасувати збереження
+      }
+      entry.replacesLunch = 1;
+    }
+  }
 
   const prevAppointments = [...state.db.appointments];
   if (id) {

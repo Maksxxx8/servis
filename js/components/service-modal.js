@@ -7,6 +7,22 @@ import { $, show, hide } from '../utils/dom.js';
 import { saveDatabase } from '../http/api-client.js';
 
 /**
+ * Встановити вибраний колір послуги
+ */
+function setSelectedServiceColor(color) {
+  const input = $('edit-service-color');
+  if (input) input.value = color;
+
+  const swatches = document.querySelectorAll('#service-color-swatches [data-service-color]');
+  swatches.forEach(btn => {
+    const isSelected = btn.dataset.serviceColor.toLowerCase() === color.toLowerCase();
+    btn.className = isSelected
+      ? "w-7 h-7 rounded-full border-2 border-indigo-600 shadow-md ring-2 ring-indigo-200 scale-110 transition"
+      : "w-7 h-7 rounded-full border-2 border-transparent transition hover:scale-105";
+  });
+}
+
+/**
  * Відкрити модалку послуги (нова або редагування)
  * @param {string|null} serviceId — id послуги для редагування, або null для нової
  */
@@ -26,6 +42,7 @@ export function openServiceModal(serviceId = null) {
     $('edit-service-duration').value = s.duration;
     $('edit-service-buffer').value = s.bufferTime !== undefined ? s.bufferTime : 15;
     $('edit-service-price').value = s.price;
+    setSelectedServiceColor(s.color || '#63ade2');
   } else {
     $('service-modal-title').textContent = 'Нова послуга';
     $('edit-service-id').value = '';
@@ -33,6 +50,7 @@ export function openServiceModal(serviceId = null) {
     $('edit-service-duration').value = 60;
     $('edit-service-buffer').value = 15;
     $('edit-service-price').value = 500;
+    setSelectedServiceColor('#63ade2');
   }
 
   show('service-modal');
@@ -55,10 +73,11 @@ export async function saveServiceFromModal() {
   const duration = Number($('edit-service-duration').value) || 60;
   const bufferTime = Number($('edit-service-buffer').value) || 0;
   const price = Number($('edit-service-price').value) || 0;
+  const color = $('edit-service-color')?.value || '#63ade2';
 
   if (!title) return alert('Введіть назву послуги');
 
-  const payload = { id: id || ('s' + Date.now()), masterId, title, duration, bufferTime, price };
+  const payload = { id: id || ('s' + Date.now()), masterId, title, duration, bufferTime, price, color };
 
   const prevServices = [...state.db.services];
   if (id) {
@@ -102,4 +121,19 @@ export function initServiceModal() {
 
   const btnCancel = document.querySelector('#service-modal [data-action="cancel-service"]');
   if (btnCancel) btnCancel.addEventListener('click', closeServiceModal);
+
+  // Вибір кольору послуги з палітри
+  const swatches = document.querySelectorAll('#service-color-swatches [data-service-color]');
+  swatches.forEach(btn => {
+    btn.addEventListener('click', () => {
+      setSelectedServiceColor(btn.dataset.serviceColor);
+    });
+  });
+
+  const customColorInput = $('edit-service-custom-color');
+  if (customColorInput) {
+    customColorInput.addEventListener('input', () => {
+      setSelectedServiceColor(customColorInput.value);
+    });
+  }
 }

@@ -6,10 +6,61 @@
 import state from '../state.js';
 import { $, show, hide, toggle } from '../utils/dom.js';
 import { todayStr } from '../config.js';
+import { timeToMin } from '../utils/time.js';
 import { saveDatabase } from '../http/api-client.js';
-import { calculateAvailableSlots, findNextAvailableDays, generateGoogleCalendarUrl, downloadIcsFile } from '../utils/schedule.js';
+import { calculateAvailableSlots, findNextAvailableDays, getMasterDaySchedule, generateGoogleCalendarUrl, downloadIcsFile } from '../utils/schedule.js';
 
 let lastCreatedBooking = null;
+
+/**
+ * Валідація українського мобільного номера
+ * Приймає тільки українські мобільні номери:
+ * +380 (XX) XXX-XX-XX, 380XXXXXXXXX, 0XXXXXXXXX
+ * Коди операторів: 50, 63, 66, 67, 68, 73, 77, 91, 92, 93, 94, 95, 96, 97, 98, 99
+ */
+export function validateUkrainianPhone(phoneStr) {
+  if (!phoneStr) return { valid: false, error: "Будь ласка, введіть номер телефону" };
+  const digits = phoneStr.replace(/\D/g, '');
+  
+  let normalized = '';
+  if (digits.startsWith('380') && digits.length === 12) {
+    normalized = digits;
+  } else if (digits.startsWith('0') && digits.length === 10) {
+    normalized = '380' + digits.slice(1);
+  } else if (digits.startsWith('80') && digits.length === 11) {
+    normalized = '3' + digits;
+  } else {
+    return { 
+      valid: false, 
+      error: "Будь ласка, вкажіть коректний український номер телефону (+380... або 0...)" 
+    };
+  }
+
+  const opCode = normalized.slice(3, 5);
+  const ukrMobileCodes = ['50', '63', '66', '67', '68', '73', '77', '91', '92', '93', '94', '95', '96', '97', '98', '99'];
+
+  if (!ukrMobileCodes.includes(opCode)) {
+    return { 
+      valid: false, 
+      error: `Код оператора (${opCode}) не є дійсним мобільним кодом України. Дозволені лише мобільні оператори (Київстар, Vodafone, lifecell та ін.)` 
+    };
+  }
+
+  const formatted = `+380 (${opCode}) ${normalized.slice(5, 8)}-${normalized.slice(8, 10)}-${normalized.slice(10, 12)}`;
+  return { valid: true, clean: '+' + normalized, formatted };
+}
+
+/**
+ * Валідація Email
+ */
+export function validateEmail(emailStr) {
+  if (!emailStr) return { valid: false, error: "Будь ласка, вкажіть ваш Email для підтвердження запису" };
+  const re = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  if (!re.test(emailStr.trim())) {
+    return { valid: false, error: "Будь ласка, вкажіть коректну адресу електронної пошти (наприклад, anna@gmail.com)" };
+  }
+  return { valid: true, clean: emailStr.trim() };
+}
 
 // =================== РЕНДЕР МАЙСТРІВ (Крок 1) ===================
 
@@ -231,12 +282,37 @@ function fillConfirmation() {
 // =================== ПІДТВЕРДЖЕННЯ ЗАПИСУ КЛІЄНТОМ ===================
 
 export async function submitClientBooking() {
+  // Захист від спам-ботів (honeypot)
+  const honeypot = $('client-website');
+  if (honeypot && honeypot.value.trim() !== '') {
+    console.warn('Bot submission blocked');
+    return;
+  }
+
   const name = $('client-name').value.trim();
   const phone = $('client-phone').value.trim();
+  const email = $('client-email') ? $('client-email').value.trim() : '';
   const comment = $('client-comment').value.trim();
 
-  if (!name || !phone) {
-    alert("Будь ласка, вкажіть ваше ім'я та телефон");
+  if (!name) {
+    alert("Будь ласка, вкажіть ваше ім'я");
+    $('client-name')?.focus();
+    return;
+  }
+
+  // Валідація українського номера телефону
+  const phoneCheck = validateUkrainianPhone(phone);
+  if (!phoneCheck.valid) {
+    alert(phoneCheck.error);
+    $('client-phone')?.focus();
+    return;
+  }
+
+  // Валідація обов'язкового Email для верифікації
+  const emailCheck = validateEmail(email);
+  if (!emailCheck.valid) {
+    alert(emailCheck.error);
+    $('client-email')?.focus();
     return;
   }
 
@@ -244,6 +320,41 @@ export async function submitClientBooking() {
   const selectedObjs = state.db.services.filter(s => state.widget.serviceIds.includes(s.id));
   const totalDur = selectedObjs.reduce((acc, s) => acc + Number(s.duration), 0);
   const totalPrice = selectedObjs.reduce((acc, s) => acc + Number(s.price), 0);
+
+  // Захист від подвійного запису та накладання за часом (у т.ч. з урахуванням обіду)
+  const newStart = timeToMin(state.widget.time);
+  const newEnd = newStart + totalDur;
+
+  // 1. Перевірка на перетин з активними записами майстра
+  const hasBookingConflict = (state.db.appointments || []).some(a => {
+    if (a.masterId !== state.widget.masterId || a.date !== state.widget.date || a.status === 'cancelled') {
+      return false;
+    }
+    const aStart = timeToMin(a.time);
+    const aEnd = aStart + Number(a.duration || 30);
+    return Math.max(newStart, aStart) < Math.min(newEnd, aEnd);
+  });
+
+  if (hasBookingConflict) {
+    alert("Обраний час вже зайнятий або перетинається з іншим записом майстра. Будь ласка, оберіть інший час.");
+    goToStep(3);
+    return;
+  }
+
+  // 2. Перевірка на перетин з обідньою перервою майстра
+  const daySched = getMasterDaySchedule(master, state.widget.date);
+  if (daySched && daySched.regularBreaks && daySched.regularBreaks.length > 0) {
+    const hasLunchConflict = daySched.regularBreaks.some(br => {
+      const bStart = timeToMin(br.start);
+      const bEnd = timeToMin(br.end);
+      return Math.max(newStart, bStart) < Math.min(newEnd, bEnd);
+    });
+    if (hasLunchConflict) {
+      alert("Обраний час потрапляє на обідню перерву майстра. Будь ласка, оберіть інший час.");
+      goToStep(3);
+      return;
+    }
+  }
 
   const maxServiceBuffer = selectedObjs.reduce((acc, s) => Math.max(acc, Number(s.bufferTime !== undefined ? s.bufferTime : 0)), 0);
   const buffer = maxServiceBuffer > 0 ? maxServiceBuffer : (Number(master.globalBuffer) || 15);
@@ -258,8 +369,10 @@ export async function submitClientBooking() {
     bufferTime: buffer,
     price: totalPrice,
     clientName: name,
-    clientPhone: phone,
+    clientPhone: phoneCheck.formatted,
+    clientEmail: emailCheck.clean,
     status: 'pending',
+    isVerified: 0,
     notes: comment
   };
 
@@ -270,17 +383,28 @@ export async function submitClientBooking() {
 Майстер: <b>${master.name}</b>
 Послуги: ${selectedObjs.map(s => s.title).join(', ')}
 Дата: <b>${newBooking.date} о ${newBooking.time}</b> (тривалість: ${totalDur} хв)
-Клієнт: ${name} (${phone})
+Клієнт: ${name} (${phoneCheck.formatted})
+Email: ${emailCheck.clean}
 Сума: ${totalPrice} ₴
-${comment ? 'Коментар: ' + comment : ''}`;
+${comment ? 'Коментар: ' + comment : ''}
+⚠️ <i>Очікує підтвердження Email клієнтом</i>`;
 
-  const ok = await saveDatabase({ 
+  const saveRes = await saveDatabase({ 
     chatId: master.tgChatId || state.db.salon.tgChatId, 
     message: tgMessage,
-    appointmentId: newBooking.id 
+    appointmentId: newBooking.id,
+    emailPayload: {
+      email: emailCheck.clean,
+      appointmentId: newBooking.id,
+      clientName: name,
+      masterName: master.name,
+      services: selectedObjs.map(s => s.title).join(', '),
+      date: newBooking.date,
+      time: newBooking.time
+    }
   });
 
-  if (!ok) {
+  if (!saveRes) {
     state.db.appointments = state.db.appointments.filter(a => a.id !== newBooking.id);
     state.notify();
     return;
@@ -289,6 +413,22 @@ ${comment ? 'Коментар: ' + comment : ''}`;
   const successEl = $('success-details');
   if (successEl) {
     successEl.textContent = `${master.name} чекає на вас ${newBooking.date} о ${newBooking.time}. Вартість: ${totalPrice} ₴.`;
+  }
+
+  // Блок сповіщення про верифікацію пошти
+  const vNotice = $('email-verification-notice');
+  const vText = $('email-verification-text');
+  const vLink = $('email-verification-quick-link');
+  if (vNotice && vText) {
+    vNotice.classList.remove('hidden');
+    vText.innerHTML = `Лист із посиланням для підтвердження надіслано на адресу <b>${emailCheck.clean}</b>. Будь ласка, перейдіть за посиланням у листі для остаточного підтвердження запису.`;
+    if (vLink) {
+      if (saveRes && saveRes.verification && saveRes.verification.verify_url) {
+        vLink.innerHTML = `<a href="${saveRes.verification.verify_url}" target="_blank" class="inline-flex items-center gap-1.5 text-xs text-indigo-700 hover:text-indigo-900 font-semibold underline mt-1"><span>🔗</span> Підтвердити зараз (посилання з листа)</a>`;
+      } else {
+        vLink.innerHTML = '';
+      }
+    }
   }
 
   goToStep(5);
@@ -309,8 +449,15 @@ export function resetWidget() {
   if (nameEl) nameEl.value = '';
   const phoneEl = $('client-phone');
   if (phoneEl) phoneEl.value = '';
+  const emailEl = $('client-email');
+  if (emailEl) emailEl.value = '';
+  const websiteEl = $('client-website');
+  if (websiteEl) websiteEl.value = '';
   const commentEl = $('client-comment');
   if (commentEl) commentEl.value = '';
+
+  const vNotice = $('email-verification-notice');
+  if (vNotice) vNotice.classList.add('hidden');
 
   goToStep(1);
   renderWidgetMasters();
@@ -334,8 +481,8 @@ function addSuccessCalendarButtons() {
       <span>Додати в Google Calendar</span>
     </button>
     <button type="button" id="btn-success-ics" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition">
-      <span>📥</span>
-      <span>Завантажити .ics (Apple / Outlook)</span>
+      <span>🍏</span>
+      <span>Додати в Apple Calendar</span>
     </button>
   `;
 

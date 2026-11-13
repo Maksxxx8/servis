@@ -93,6 +93,7 @@ class CRM_DB {
                 duration INT NOT NULL,
                 buffer_time INT DEFAULT 15,
                 price REAL NOT NULL,
+                color VARCHAR(32) DEFAULT '#63ade2',
                 is_active INT DEFAULT 1,
                 sort_order INT DEFAULT 0
             );
@@ -102,6 +103,7 @@ class CRM_DB {
                 id VARCHAR(64) PRIMARY KEY,
                 name VARCHAR(128) NOT NULL,
                 phone VARCHAR(32) NOT NULL UNIQUE,
+                email VARCHAR(255) DEFAULT '',
                 notes TEXT DEFAULT '',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -114,6 +116,7 @@ class CRM_DB {
                 client_id VARCHAR(64),
                 client_name VARCHAR(128) NOT NULL,
                 client_phone VARCHAR(32) NOT NULL,
+                client_email VARCHAR(255) DEFAULT '',
                 date VARCHAR(10) NOT NULL,
                 time VARCHAR(5) NOT NULL,
                 duration INT NOT NULL,
@@ -122,6 +125,9 @@ class CRM_DB {
                 status VARCHAR(20) DEFAULT 'confirmed',
                 service_ids TEXT,
                 google_event_id VARCHAR(128) DEFAULT NULL,
+                verification_token VARCHAR(64) DEFAULT NULL,
+                is_verified INT DEFAULT 0,
+                replaces_lunch INT DEFAULT 0,
                 notes TEXT DEFAULT '',
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -159,6 +165,12 @@ class CRM_DB {
         // Автоматична міграція існуючих таблиць (якщо вони вже створені на сервері)
         $this->ensureColumnExists('masters', 'google_calendar_id', 'VARCHAR(255) DEFAULT ""');
         $this->ensureColumnExists('appointments', 'google_event_id', 'VARCHAR(128) DEFAULT NULL');
+        $this->ensureColumnExists('appointments', 'client_email', 'VARCHAR(255) DEFAULT ""');
+        $this->ensureColumnExists('appointments', 'verification_token', 'VARCHAR(64) DEFAULT NULL');
+        $this->ensureColumnExists('appointments', 'is_verified', 'INT DEFAULT 0');
+        $this->ensureColumnExists('appointments', 'replaces_lunch', 'INT DEFAULT 0');
+        $this->ensureColumnExists('services', 'color', 'VARCHAR(32) DEFAULT "#63ade2"');
+        $this->ensureColumnExists('clients', 'email', 'VARCHAR(255) DEFAULT ""');
     }
 
     private function ensureColumnExists(string $table, string $column, string $typeDef): void {
@@ -239,12 +251,12 @@ class CRM_DB {
                 ]
             ],
             'services' => [
-                ['id' => 's1', 'masterId' => 'm1', 'title' => 'Архітектура + корекція та фарбування брів', 'duration' => 60, 'bufferTime' => 15, 'price' => 500],
-                ['id' => 's2', 'masterId' => 'm1', 'title' => 'Ламінування брів (повний комплекс)', 'duration' => 60, 'bufferTime' => 15, 'price' => 650],
-                ['id' => 's3', 'masterId' => 'm1', 'title' => 'Корекція брів (віск / пінцет)', 'duration' => 30, 'bufferTime' => 10, 'price' => 300],
-                ['id' => 's4', 'masterId' => 'm2', 'title' => 'Манікюр комплекс (зняття + гігієна + гель-лак)', 'duration' => 90, 'bufferTime' => 15, 'price' => 650],
-                ['id' => 's5', 'masterId' => 'm2', 'title' => 'Манікюр з укріпленням гелем / полігелем', 'duration' => 120, 'bufferTime' => 15, 'price' => 800],
-                ['id' => 's6', 'masterId' => 'm2', 'title' => 'Гігієнічний манікюр без покриття', 'duration' => 60, 'bufferTime' => 10, 'price' => 400]
+                ['id' => 's1', 'masterId' => 'm1', 'title' => 'Архітектура + корекція та фарбування брів', 'duration' => 60, 'bufferTime' => 15, 'price' => 500, 'color' => '#63ade2'],
+                ['id' => 's2', 'masterId' => 'm1', 'title' => 'Ламінування брів (повний комплекс)', 'duration' => 60, 'bufferTime' => 15, 'price' => 650, 'color' => '#ba82c8'],
+                ['id' => 's3', 'masterId' => 'm1', 'title' => 'Корекція брів (віск / пінцет)', 'duration' => 30, 'bufferTime' => 10, 'price' => 300, 'color' => '#ced65a'],
+                ['id' => 's4', 'masterId' => 'm2', 'title' => 'Манікюр комплекс (зняття + гігієна + гель-лак)', 'duration' => 90, 'bufferTime' => 15, 'price' => 650, 'color' => '#ebacd3'],
+                ['id' => 's5', 'masterId' => 'm2', 'title' => 'Манікюр з укріпленням гелем / полігелем', 'duration' => 120, 'bufferTime' => 15, 'price' => 800, 'color' => '#f2be8a'],
+                ['id' => 's6', 'masterId' => 'm2', 'title' => 'Гігієнічний манікюр без покриття', 'duration' => 60, 'bufferTime' => 10, 'price' => 400, 'color' => '#63ade2']
             ],
             'appointments' => [
                 [
@@ -348,7 +360,8 @@ class CRM_DB {
                 'title' => $s['title'],
                 'duration' => (int)$s['duration'],
                 'bufferTime' => (int)$s['buffer_time'],
-                'price' => (float)$s['price']
+                'price' => (float)$s['price'],
+                'color' => !empty($s['color']) ? $s['color'] : '#63ade2'
             ];
         }
 
@@ -367,8 +380,12 @@ class CRM_DB {
                 'price' => (float)$a['price'],
                 'clientName' => $a['client_name'],
                 'clientPhone' => $a['client_phone'],
+                'clientEmail' => $a['client_email'] ?? '',
                 'status' => $a['status'] ?? 'confirmed',
                 'googleEventId' => $a['google_event_id'] ?? null,
+                'verificationToken' => $a['verification_token'] ?? null,
+                'isVerified' => (int)($a['is_verified'] ?? 0),
+                'replacesLunch' => (int)($a['replaces_lunch'] ?? 0),
                 'notes' => $a['notes'] ?? ''
             ];
         }
@@ -451,8 +468,8 @@ class CRM_DB {
             if (isset($data['services']) && is_array($data['services'])) {
                 $this->pdo->exec("DELETE FROM services");
                 $stmt = $this->pdo->prepare("
-                    INSERT INTO services (id, master_id, title, duration, buffer_time, price, is_active, sort_order)
-                    VALUES (:id, :master_id, :title, :duration, :buffer_time, :price, 1, :sort_order)
+                    INSERT INTO services (id, master_id, title, duration, buffer_time, price, color, is_active, sort_order)
+                    VALUES (:id, :master_id, :title, :duration, :buffer_time, :price, :color, 1, :sort_order)
                 ");
                 $sort = 0;
                 foreach ($data['services'] as $s) {
@@ -464,6 +481,7 @@ class CRM_DB {
                         ':duration' => (int)($s['duration'] ?? 60),
                         ':buffer_time' => (int)($s['bufferTime'] ?? 15),
                         ':price' => (float)($s['price'] ?? 0),
+                        ':color' => $s['color'] ?? '#63ade2',
                         ':sort_order' => $sort++
                     ]);
                 }
@@ -471,12 +489,16 @@ class CRM_DB {
 
             // 4. Записи (Appointments) & Клієнти
             if (isset($data['appointments']) && is_array($data['appointments'])) {
-                // Отримуємо існуючі прив'язки до Google Calendar, щоб не втратити google_event_id при оновленні записів
+                // Отримуємо існуючі прив'язки до Google Calendar та верифікації
                 $existingGids = [];
+                $existingTokens = [];
+                $existingVerified = [];
                 try {
-                    $rowsGid = $this->pdo->query("SELECT id, google_event_id FROM appointments WHERE google_event_id IS NOT NULL AND google_event_id != ''")->fetchAll();
-                    foreach ($rowsGid as $rg) {
-                        $existingGids[$rg['id']] = $rg['google_event_id'];
+                    $rowsMeta = $this->pdo->query("SELECT id, google_event_id, verification_token, is_verified FROM appointments")->fetchAll();
+                    foreach ($rowsMeta as $rm) {
+                        if (!empty($rm['google_event_id'])) $existingGids[$rm['id']] = $rm['google_event_id'];
+                        if (!empty($rm['verification_token'])) $existingTokens[$rm['id']] = $rm['verification_token'];
+                        $existingVerified[$rm['id']] = (int)($rm['is_verified'] ?? 0);
                     }
                 } catch (Exception $e) {
                     // таблиця ще може бути не ініціалізована
@@ -484,15 +506,16 @@ class CRM_DB {
 
                 $stmtApp = $this->pdo->prepare("
                     INSERT OR REPLACE INTO appointments 
-                    (id, master_id, client_id, client_name, client_phone, date, time, duration, buffer_time, price, status, service_ids, google_event_id, notes, updated_at)
-                    VALUES (:id, :master_id, :client_id, :client_name, :client_phone, :date, :time, :duration, :buffer_time, :price, :status, :service_ids, :google_event_id, :notes, CURRENT_TIMESTAMP)
+                    (id, master_id, client_id, client_name, client_phone, client_email, date, time, duration, buffer_time, price, status, service_ids, google_event_id, verification_token, is_verified, replaces_lunch, notes, updated_at)
+                    VALUES (:id, :master_id, :client_id, :client_name, :client_phone, :client_email, :date, :time, :duration, :buffer_time, :price, :status, :service_ids, :google_event_id, :verification_token, :is_verified, :replaces_lunch, :notes, CURRENT_TIMESTAMP)
                 ");
 
                 $stmtClient = $this->pdo->prepare("
-                    INSERT INTO clients (id, name, phone, notes, created_at, updated_at)
-                    VALUES (:id, :name, :phone, :notes, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    INSERT INTO clients (id, name, phone, email, notes, created_at, updated_at)
+                    VALUES (:id, :name, :phone, :email, :notes, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     ON CONFLICT(phone) DO UPDATE SET 
                         name = excluded.name,
+                        email = excluded.email,
                         updated_at = CURRENT_TIMESTAMP
                 ");
 
@@ -501,34 +524,44 @@ class CRM_DB {
                     if (empty($a['id'])) continue;
                     $allAppIds[] = $a['id'];
 
-                    $clientId = 'c_' . preg_replace('/[^\d]/', '', $a['clientPhone'] ?? '');
-                    if (!empty($a['clientPhone'])) {
+                    $clientPhone = $a['clientPhone'] ?? ($a['client_phone'] ?? '');
+                    $clientEmail = $a['clientEmail'] ?? ($a['client_email'] ?? '');
+                    $clientId = 'c_' . preg_replace('/[^\d]/', '', $clientPhone);
+                    if (!empty($clientPhone)) {
                         $stmtClient->execute([
                             ':id' => $clientId,
-                            ':name' => $a['clientName'] ?? 'Клієнт',
-                            ':phone' => $a['clientPhone'],
+                            ':name' => $a['clientName'] ?? ($a['client_name'] ?? 'Клієнт'),
+                            ':phone' => $clientPhone,
+                            ':email' => $clientEmail,
                             ':notes' => $a['notes'] ?? ''
                         ]);
                     }
 
                     $incomingGid = $a['googleEventId'] ?? ($a['google_event_id'] ?? null);
-                    // Захист від затирання: якщо клієнт не надіслав googleEventId, зберігаємо існуючий із бази
                     $finalGid = !empty($incomingGid) ? $incomingGid : ($existingGids[$a['id']] ?? null);
+
+                    $vToken = $a['verificationToken'] ?? ($existingTokens[$a['id']] ?? null);
+                    $isVer = isset($a['isVerified']) ? (int)$a['isVerified'] : ($existingVerified[$a['id']] ?? 0);
+                    $repLunch = !empty($a['replacesLunch']) ? 1 : 0;
 
                     $stmtApp->execute([
                         ':id' => $a['id'],
-                        ':master_id' => $a['masterId'] ?? '',
+                        ':master_id' => $a['masterId'] ?? ($a['master_id'] ?? ''),
                         ':client_id' => $clientId,
-                        ':client_name' => $a['clientName'] ?? 'Клієнт',
-                        ':client_phone' => $a['clientPhone'] ?? '',
+                        ':client_name' => $a['clientName'] ?? ($a['client_name'] ?? 'Клієнт'),
+                        ':client_phone' => $clientPhone,
+                        ':client_email' => $clientEmail,
                         ':date' => $a['date'] ?? date('Y-m-d'),
                         ':time' => $a['time'] ?? '10:00',
                         ':duration' => (int)($a['duration'] ?? 60),
-                        ':buffer_time' => (int)($a['bufferTime'] ?? 15),
+                        ':buffer_time' => (int)($a['bufferTime'] ?? ($a['buffer_time'] ?? 15)),
                         ':price' => (float)($a['price'] ?? 0),
                         ':status' => $a['status'] ?? 'confirmed',
-                        ':service_ids' => json_encode($a['serviceIds'] ?? [], JSON_UNESCAPED_UNICODE),
+                        ':service_ids' => json_encode($a['serviceIds'] ?? ($a['service_ids'] ?? []), JSON_UNESCAPED_UNICODE),
                         ':google_event_id' => $finalGid,
+                        ':verification_token' => $vToken,
+                        ':is_verified' => $isVer,
+                        ':replaces_lunch' => $repLunch,
                         ':notes' => $a['notes'] ?? ''
                     ]);
                 }

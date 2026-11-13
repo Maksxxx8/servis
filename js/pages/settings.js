@@ -157,14 +157,16 @@ export function renderSettingsForm() {
   if (servicesEl) {
     servicesEl.innerHTML = state.db.services.map(s => {
       const m = state.db.masters.find(x => x.id === s.masterId);
+      const sColor = s.color || '#63ade2';
       return `
-        <div class="py-3 flex items-center justify-between gap-2">
-          <div>
-            <span class="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700">${m ? m.name : ''}</span>
-            <span class="font-semibold text-slate-800 ml-1">${s.title}</span>
-            <span class="text-xs text-slate-400 ml-2">${s.duration} хв (+${s.bufferTime !== undefined ? s.bufferTime : 15} хв буфер) • ${s.price} ₴</span>
+        <div class="py-3 flex items-center justify-between gap-2 border-b border-slate-100 last:border-b-0">
+          <div class="flex items-center min-w-0">
+            <span class="w-3.5 h-3.5 rounded-full inline-block mr-2 shrink-0 border border-slate-200" style="background-color: ${sColor};" title="Колір: ${sColor}"></span>
+            <span class="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700 mr-2 shrink-0">${m ? m.name : ''}</span>
+            <span class="font-semibold text-slate-800 truncate">${s.title}</span>
+            <span class="text-xs text-slate-400 ml-2 shrink-0">${s.duration} хв (+${s.bufferTime !== undefined ? s.bufferTime : 15} хв буфер) • ${s.price} ₴</span>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 shrink-0">
             <button data-edit-service="${s.id}" class="text-xs px-2.5 py-1 rounded-lg border hover:bg-slate-50">✎ Змінити</button>
             <button data-delete-service="${s.id}" class="text-xs px-2.5 py-1 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100">✕</button>
           </div>

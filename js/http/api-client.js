@@ -101,7 +101,15 @@ export async function loadDatabase(silent = false) {
 export async function saveDatabase(tgPayload = null) {
   try {
     const payload = JSON.parse(JSON.stringify(state.db));
-    if (tgPayload) payload._notify_telegram = tgPayload;
+    if (tgPayload) {
+      if (tgPayload.emailPayload) {
+        payload._send_verification_email = tgPayload.emailPayload;
+        delete tgPayload.emailPayload;
+      }
+      if (tgPayload.message || tgPayload.chatId) {
+        payload._notify_telegram = tgPayload;
+      }
+    }
 
     const res = await fetch(`${activeApiUrl}?_t=${Date.now()}`, {
       method: 'POST',
@@ -128,7 +136,7 @@ export async function saveDatabase(tgPayload = null) {
         }
         localStorage.setItem('salon_crm_db_uk', JSON.stringify(state.db));
         state.notify();
-        return true;
+        return data.verification ? { ok: true, verification: data.verification } : true;
       } else {
         state.serverConnected = false;
         console.error('Помилка сервера при збереженні:', data);

@@ -120,13 +120,22 @@
             </div>
 
             <div class="space-y-3">
+              <!-- Захист від спам-ботів (honeypot) -->
+              <input type="text" id="client-website" name="website" class="hidden" tabindex="-1" autocomplete="off">
+
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">Ваше ім'я *</label>
                 <input type="text" id="client-name" placeholder="Наприклад, Анна" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
               </div>
               <div>
-                <label class="block text-xs font-medium text-slate-600 mb-1">Телефон *</label>
-                <input type="tel" id="client-phone" placeholder="+380 (__) ___-__-__" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <label class="block text-xs font-medium text-slate-600 mb-1">Мобільний телефон * (тільки Україна +380)</label>
+                <input type="tel" id="client-phone" placeholder="+380 (50) 123-45-67" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <span class="text-[10px] text-slate-400 mt-0.5 block">Приймаються українські номери: +380... або 0...</span>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">Email для підтвердження *</label>
+                <input type="email" id="client-email" placeholder="anna@gmail.com" class="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <span class="text-[10px] text-slate-400 mt-0.5 block">На цю пошту надійде посилання для підтвердження запису</span>
               </div>
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">Коментар до запису (необов'язково)</label>
@@ -144,6 +153,16 @@
             <div class="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center text-3xl mx-auto">✓</div>
             <h2 class="text-xl font-bold text-slate-800">Ви успішно записані!</h2>
             <p id="success-details" class="text-sm text-slate-600 max-w-xs mx-auto"></p>
+
+            <!-- Блок верифікації Email -->
+            <div id="email-verification-notice" class="hidden bg-indigo-50/80 border border-indigo-100 rounded-2xl p-4 text-xs text-indigo-950 text-left space-y-2">
+              <div class="flex items-center gap-2 font-bold text-indigo-900 text-sm">
+                <span>📧</span> Лист підтвердження відправлено!
+              </div>
+              <p id="email-verification-text" class="text-slate-600 leading-relaxed"></p>
+              <div id="email-verification-quick-link" class="pt-1"></div>
+            </div>
+
             <div class="pt-2">
               <button data-action="reset-widget" class="text-sm text-indigo-600 font-semibold hover:underline">Створити ще один запис</button>
             </div>
@@ -402,6 +421,19 @@
             <input type="number" id="edit-service-price" step="50" value="500" class="w-full border rounded-xl px-2.5 py-2">
           </div>
         </div>
+
+        <div>
+          <label class="block text-xs text-slate-500 mb-1.5 font-medium">Колір послуги в календарі та Google</label>
+          <div class="flex items-center gap-2" id="service-color-swatches">
+            <button type="button" data-service-color="#63ade2" class="w-7 h-7 rounded-full border-2 border-indigo-600 shadow-sm transition hover:scale-110" style="background-color: #63ade2;" title="Синій (#63ade2)"></button>
+            <button type="button" data-service-color="#ced65a" class="w-7 h-7 rounded-full border-2 border-transparent transition hover:scale-110" style="background-color: #ced65a;" title="Оливковий (#ced65a)"></button>
+            <button type="button" data-service-color="#ba82c8" class="w-7 h-7 rounded-full border-2 border-transparent transition hover:scale-110" style="background-color: #ba82c8;" title="Фіолетовий (#ba82c8)"></button>
+            <button type="button" data-service-color="#f2be8a" class="w-7 h-7 rounded-full border-2 border-transparent transition hover:scale-110" style="background-color: #f2be8a;" title="Персиковий (#f2be8a)"></button>
+            <button type="button" data-service-color="#ebacd3" class="w-7 h-7 rounded-full border-2 border-transparent transition hover:scale-110" style="background-color: #ebacd3;" title="Рожевий (#ebacd3)"></button>
+            <input type="color" id="edit-service-custom-color" class="w-7 h-7 rounded-full p-0 border border-slate-300 cursor-pointer" title="Обрати свій відтінок">
+          </div>
+          <input type="hidden" id="edit-service-color" value="#63ade2">
+        </div>
       </div>
       <div class="flex gap-2 pt-2">
         <button data-action="cancel-service" class="flex-1 py-2.5 rounded-xl border text-xs font-semibold">Скасувати</button>
@@ -480,7 +512,7 @@
           <span>📅</span> Google Calendar
         </button>
         <button type="button" data-action="modal-export-ics" class="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition flex items-center justify-center gap-1.5">
-          <span>📥</span> .ics файл
+          <span>🍏</span> Apple Calendar (.ics)
         </button>
       </div>
 

@@ -117,13 +117,33 @@ class GoogleCalendarService {
     }
 
     /**
+     * Відповідність HEX-кольору послуги та colorId у Google Calendar:
+     * #63ade2 -> 7 (Peacock / Блакитний)
+     * #ced65a -> 2 (Sage / Оливково-зелений)
+     * #ba82c8 -> 3 (Grape / Бузковий)
+     * #f2be8a -> 6 (Tangerine / Персиковий)
+     * #ebacd3 -> 4 (Flamingo / Рожевий)
+     */
+    public static function hexToGoogleColorId(string $hex): string {
+        $hex = strtolower(trim($hex));
+        $map = [
+            '#63ade2' => '7',
+            '#ced65a' => '2',
+            '#ba82c8' => '3',
+            '#f2be8a' => '6',
+            '#ebacd3' => '4'
+        ];
+        return $map[$hex] ?? '7';
+    }
+
+    /**
      * Створити подію в Google Calendar
      */
-    public function createEvent(string $calendarId, array $app, string $masterName, string $servicesText): ?string {
+    public function createEvent(string $calendarId, array $app, string $masterName, string $servicesText, string $serviceColor = '#63ade2'): ?string {
         $token = $this->getAccessToken();
         if (!$token) return null;
 
-        $body = $this->formatEventPayload($app, $masterName, $servicesText);
+        $body = $this->formatEventPayload($app, $masterName, $servicesText, $serviceColor);
 
         $url = "https://www.googleapis.com/calendar/v3/calendars/" . urlencode($calendarId) . "/events";
         $ch = curl_init($url);
@@ -152,11 +172,11 @@ class GoogleCalendarService {
     /**
      * Оновити подію в Google Calendar (перенесення часу, зміна послуги)
      */
-    public function updateEvent(string $calendarId, string $eventId, array $app, string $masterName, string $servicesText): bool {
+    public function updateEvent(string $calendarId, string $eventId, array $app, string $masterName, string $servicesText, string $serviceColor = '#63ade2'): bool {
         $token = $this->getAccessToken();
         if (!$token) return false;
 
-        $body = $this->formatEventPayload($app, $masterName, $servicesText);
+        $body = $this->formatEventPayload($app, $masterName, $servicesText, $serviceColor);
 
         $url = "https://www.googleapis.com/calendar/v3/calendars/" . urlencode($calendarId) . "/events/" . urlencode($eventId);
         $ch = curl_init($url);
@@ -242,6 +262,17 @@ class GoogleCalendarService {
         }
         $servicesText = !empty($srvTitles) ? implode(', ', $srvTitles) : 'Послуга салону';
 
+        // Визначаємо колір першої послуги
+        $srvColor = '#63ade2';
+        if (!empty($srvIds)) {
+            foreach ($fullState['services'] as $s) {
+                if ($s['id'] === $srvIds[0] && !empty($s['color'])) {
+                    $srvColor = $s['color'];
+                    break;
+                }
+            }
+        }
+
         $eventId = $app['googleEventId'] ?? ($app['google_event_id'] ?? null);
         $status = $app['status'] ?? 'confirmed';
 
@@ -255,14 +286,14 @@ class GoogleCalendarService {
 
         // Якщо подія вже є в Google Календарі — оновлюємо
         if (!empty($eventId)) {
-            $updated = $this->updateEvent($calendarId, $eventId, $app, $masterName, $servicesText);
+            $updated = $this->updateEvent($calendarId, $eventId, $app, $masterName, $servicesText, $srvColor);
             if ($updated) return $eventId;
             // Якщо оновлення не вдалося (подію видалили вручну в Google Календарі або 404), створюємо нову
             error_log("Google Calendar: Не вдалося оновити подію {$eventId} в {$calendarId}, створюємо нову подію");
         }
 
         // Якщо події ще немає або стара була видалена в Google — створюємо нову
-        return $this->createEvent($calendarId, $app, $masterName, $servicesText);
+        return $this->createEvent($calendarId, $app, $masterName, $servicesText, $srvColor);
     }
 
     /**
@@ -379,7 +410,7 @@ class GoogleCalendarService {
         ];
     }
 
-    private function formatEventPayload(array $app, string $masterName, string $servicesText): array {
+    private function formatEventPayload(array $app, string $masterName, string $servicesText, string $serviceColor = '#63ade2'): array {
         $cName = $app['clientName'] ?? ($app['client_name'] ?? 'Клієнт');
         $cPhone = $app['clientPhone'] ?? ($app['client_phone'] ?? '');
         $date = $app['date'] ?? date('Y-m-d');
@@ -413,6 +444,8 @@ class GoogleCalendarService {
                 (!empty($notes) ? "Нотатка: {$notes}\n" : "") .
                 "\n(Створено автоматично Beauty Studio CRM)";
 
+        $gColorId = self::hexToGoogleColorId($serviceColor);
+
         return [
             'summary' => "{$cName} — {$servicesText} ({$masterName})",
             'description' => $desc,
@@ -424,7 +457,7 @@ class GoogleCalendarService {
                 'dateTime' => $endIso,
                 'timeZone' => 'Europe/Kyiv'
             ],
-            'colorId' => '11' // Червоний/Кораловий відтінок для зручної візуалізації
+            'colorId' => $gColorId
         ];
     }
 

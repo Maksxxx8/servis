@@ -237,7 +237,91 @@ function renderDayMasterCell(master, dateStr, slotTime, slotMin, dayApps, timeBl
     `;
   }
 
-  // 3. Регулярна перерва (обід)
+  // 3. Запис клієнта, що починається на цей слот
+  const app = dayApps.find(a => a.masterId === master.id && a.time === slotTime && a.status !== 'cancelled');
+  if (app) {
+    const srv = (app.serviceIds || []).map(id => state.db.services.find(x => x.id === id)).filter(Boolean)[0];
+    const srvColor = srv?.color || '#63ade2';
+    const srvDesc = srv ? srv.title : 'Послуга салону';
+    const bufferMin = app.bufferTime !== undefined ? app.bufferTime : (master.globalBuffer || 15);
+
+    return `
+      <div class="flex flex-col shadow-xs group cursor-pointer transition hover:shadow-md" data-edit-booking="${app.id}">
+        <!-- Основна картка візиту з кольором послуги -->
+        <div class="p-2.5 rounded-t-xl border border-l-4 transition"
+             style="background-color: ${srvColor}18; border-color: ${srvColor}55; border-left-color: ${srvColor};">
+          <div class="flex items-center justify-between font-bold text-slate-900">
+            <div class="flex items-center gap-1.5 truncate">
+              <span class="w-2.5 h-2.5 rounded-full shrink-0 shadow-xs" style="background-color: ${srvColor};"></span>
+              <span class="truncate">${app.clientName}</span>
+            </div>
+            <span class="font-extrabold text-xs whitespace-nowrap ml-1 text-slate-800">${app.price} ₴</span>
+          </div>
+          
+          <div class="text-[11px] font-semibold truncate mt-1" style="color: ${srvColor}; filter: brightness(0.65);">
+            ✨ ${srvDesc} (${app.duration} хв)
+          </div>
+
+          <div class="text-[11px] text-slate-600 mt-1 flex items-center justify-between">
+            <span class="font-mono font-medium">📞 ${app.clientPhone}</span>
+            <span class="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-white/90 border border-slate-200">${app.status}</span>
+          </div>
+          ${app.notes ? `<div class="text-[10px] text-slate-500 mt-1 truncate">📝 ${app.notes}</div>` : ''}
+        </div>
+        <!-- Візуальний штрих-блок технічного буфера знизу -->
+        <div class="px-2 py-0.5 rounded-b-xl bg-amber-50/90 border-x border-b border-dashed border-amber-300 text-[10px] text-amber-800 font-medium flex items-center justify-between select-none">
+          <span>⏱️ Буфер: ${bufferMin} хв</span>
+          <span class="opacity-70 text-[9px]">провітрювання / стерилізація</span>
+        </div>
+      </div>
+    `;
+  }
+
+  // 4. Триваючий запис клієнта (процедура 60–120+ хв)
+  const ongoingApp = dayApps.find(a => {
+    if (a.masterId !== master.id || a.status === 'cancelled') return false;
+    const aStart = timeToMin(a.time);
+    const aEnd = aStart + Number(a.duration || 60);
+    return slotMin > aStart && slotMin < aEnd;
+  });
+  if (ongoingApp) {
+    const srv = (ongoingApp.serviceIds || []).map(id => state.db.services.find(x => x.id === id)).filter(Boolean)[0];
+    const srvColor = srv?.color || '#63ade2';
+    const aEnd = timeToMin(ongoingApp.time) + Number(ongoingApp.duration || 60);
+    return `
+      <div class="w-full h-full min-h-[44px] p-2 rounded-xl border border-l-4 flex items-center justify-between text-xs cursor-pointer select-none transition hover:opacity-90"
+           style="background-color: ${srvColor}10; border-color: ${srvColor}40; border-left-color: ${srvColor};"
+           data-edit-booking="${ongoingApp.id}">
+        <div class="flex items-center gap-1.5 truncate">
+          <span class="w-2 h-2 rounded-full shrink-0" style="background-color: ${srvColor};"></span>
+          <span class="text-slate-800 font-medium truncate">↳ Продовження: <b>${ongoingApp.clientName}</b></span>
+        </div>
+        <span class="text-[10px] text-slate-500 font-mono shrink-0 ml-1">до ${minToTime(aEnd)}</span>
+      </div>
+    `;
+  }
+
+  // 5. Технічний буфер після запису
+  const bufferApp = dayApps.find(a => {
+    if (a.masterId !== master.id || a.status === 'cancelled') return false;
+    const aStart = timeToMin(a.time);
+    const aServiceEnd = aStart + Number(a.duration || 60);
+    const aBufferEnd = aServiceEnd + Number(a.bufferTime !== undefined ? a.bufferTime : (master.globalBuffer || 15));
+    return slotMin >= aServiceEnd && slotMin < aBufferEnd;
+  });
+  if (bufferApp) {
+    const aStart = timeToMin(bufferApp.time);
+    const aServiceEnd = aStart + Number(bufferApp.duration || 60);
+    const aBufferEnd = aServiceEnd + Number(bufferApp.bufferTime !== undefined ? bufferApp.bufferTime : (master.globalBuffer || 15));
+    return `
+      <div class="w-full h-full min-h-[44px] px-2.5 py-1.5 rounded-xl bg-amber-50/70 border border-dashed border-amber-300 text-amber-800 text-[10px] flex items-center justify-between select-none cursor-pointer" data-edit-booking="${bufferApp.id}">
+        <span>⏱️ Буфер після візиту (${bufferApp.clientName})</span>
+        <span class="opacity-75 font-mono">до ${minToTime(aBufferEnd)}</span>
+      </div>
+    `;
+  }
+
+  // 6. Регулярна перерва (обід) — якщо на цей час немає запису
   const regularBreak = (sched.regularBreaks || []).find(b => {
     const bs = timeToMin(b.start);
     const be = timeToMin(b.end);
@@ -246,12 +330,12 @@ function renderDayMasterCell(master, dateStr, slotTime, slotMin, dayApps, timeBl
   if (regularBreak) {
     return `
       <div class="w-full h-full min-h-[44px] rounded-lg bg-amber-50/80 border border-dashed border-amber-200 flex items-center justify-center text-amber-800 text-xs font-medium">
-        ☕ ${regularBreak.name || 'Обідня перерва'}
+        ☕ ${regularBreak.name || 'Обідня перерва'} (${regularBreak.start}–${regularBreak.end})
       </div>
     `;
   }
 
-  // 4. Разова перерва (TimeBlock)
+  // 7. Разова перерва (TimeBlock)
   const tb = timeBlocks.find(b => {
     if (b.masterId !== master.id) return false;
     const bs = timeToMin(b.startTime);
@@ -267,47 +351,7 @@ function renderDayMasterCell(master, dateStr, slotTime, slotMin, dayApps, timeBl
     `;
   }
 
-  // 5. Запис клієнта (Appointment)
-  const app = dayApps.find(a => a.masterId === master.id && a.time === slotTime);
-  if (app) {
-    const statusColors = {
-      pending: 'bg-indigo-50 border-indigo-300 text-indigo-950',
-      confirmed: 'bg-sky-50 border-sky-300 text-sky-950',
-      paid: 'bg-emerald-50 border-emerald-300 text-emerald-950',
-      cancelled: 'bg-slate-100 border-slate-300 text-slate-400 line-through'
-    };
-    const srvNames = (app.serviceIds || []).map(id => {
-      const s = state.db.services.find(x => x.id === id);
-      return s ? s.title : '';
-    }).filter(Boolean).join(', ');
-
-    const bufferMin = app.bufferTime !== undefined ? app.bufferTime : (master.globalBuffer || 15);
-
-    return `
-      <div class="flex flex-col shadow-xs group cursor-pointer" data-edit-booking="${app.id}">
-        <!-- Основна картка візиту -->
-        <div class="p-2.5 rounded-t-xl border ${statusColors[app.status] || statusColors.pending} transition hover:shadow-sm">
-          <div class="flex items-center justify-between font-bold">
-            <span class="truncate">${app.clientName} (${app.duration} хв)</span>
-            <span class="font-extrabold whitespace-nowrap">${app.price} ₴</span>
-          </div>
-          <div class="text-[11px] opacity-80 truncate mt-0.5">${srvNames}</div>
-          <div class="text-[11px] opacity-75 mt-0.5 flex items-center justify-between">
-            <span>📞 ${app.clientPhone}</span>
-            <span class="text-[10px] uppercase font-bold tracking-wider">${app.status}</span>
-          </div>
-          ${app.notes ? `<div class="text-[10px] opacity-75 mt-0.5 truncate">📝 ${app.notes}</div>` : ''}
-        </div>
-        <!-- Візуальний штрих-блок технічного буфера знизу -->
-        <div class="px-2 py-0.5 rounded-b-xl bg-amber-50/90 border-x border-b border-dashed border-amber-300 text-[10px] text-amber-800 font-medium flex items-center justify-between select-none">
-          <span>⏱️ Буфер: ${bufferMin} хв</span>
-          <span class="opacity-70 text-[9px]">провітрювання / стерилізація</span>
-        </div>
-      </div>
-    `;
-  }
-
-  // 6. Порожній вільний слот
+  // 8. Порожній вільний слот
   return `
     <button type="button" data-slot-action="${master.id}|${dateStr}|${slotTime}" class="w-full h-full min-h-[44px] rounded-xl hover:bg-indigo-50/50 text-transparent hover:text-indigo-600 text-left px-2.5 transition flex items-center justify-between group border border-transparent hover:border-indigo-200">
       <span class="text-xs font-semibold">+ Записати на ${slotTime}</span>
@@ -441,9 +485,13 @@ function renderWeekView(container) {
         inner = apps.map(a => {
           const mObj = state.db.masters.find(x => x.id === a.masterId);
           const masterPrefix = isAll && mObj ? `${mObj.avatar || '👤'} ` : '';
+          const srv = (a.serviceIds || []).map(id => state.db.services.find(x => x.id === id)).filter(Boolean)[0];
+          const srvColor = srv?.color || '#63ade2';
           return `
-            <div data-edit-booking="${a.id}" class="p-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-950 cursor-pointer text-[10px] font-bold truncate mb-0.5">
-              ${masterPrefix}${a.time} ${a.clientName} (${a.price}₴)
+            <div data-edit-booking="${a.id}" class="p-1 rounded-lg border text-[10px] font-bold truncate mb-0.5 cursor-pointer shadow-xs transition hover:brightness-95"
+                 style="background-color: ${srvColor}25; border-color: ${srvColor}; border-left-width: 3px; border-left-color: ${srvColor}; color: #0f172a;">
+              <span class="w-1.5 h-1.5 rounded-full inline-block mr-1 align-middle" style="background-color: ${srvColor};"></span>
+              ${masterPrefix}${a.time} ${a.clientName} (${srv ? srv.title : `${a.price}₴`})
             </div>
           `;
         }).join('');
