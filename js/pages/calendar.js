@@ -243,11 +243,12 @@ function renderDayMasterCell(master, dateStr, slotTime, slotMin, dayApps, timeBl
     const srv = (app.serviceIds || []).map(id => state.db.services.find(x => x.id === id)).filter(Boolean)[0];
     const srvColor = srv?.color || '#63ade2';
     const srvDesc = srv ? srv.title : 'Послуга салону';
+    const isMultiSlot = (Number(app.duration || 60) > 30);
 
     return `
       <div class="flex flex-col shadow-xs group cursor-pointer transition hover:shadow-md" data-edit-booking="${app.id}">
-        <!-- Основна картка візиту з кольором послуги (один слотом) -->
-        <div class="p-2.5 rounded-xl border border-l-4 transition"
+        <!-- Основна картка візиту з кольором послуги -->
+        <div class="p-2.5 ${isMultiSlot ? 'rounded-t-xl border-t border-x border-l-4 border-b-0' : 'rounded-xl border border-l-4'} transition"
              style="background-color: ${srvColor}18; border-color: ${srvColor}55; border-left-color: ${srvColor};">
           <div class="flex items-center justify-between font-bold text-slate-900">
             <div class="flex items-center gap-1.5 truncate">
@@ -271,7 +272,7 @@ function renderDayMasterCell(master, dateStr, slotTime, slotMin, dayApps, timeBl
     `;
   }
 
-  // 4. Триваючий запис клієнта (слоти процедури після початку — без окремого блоку продовження)
+  // 4. Триваючий запис клієнта (слоти процедури після початку до її закінчення)
   const ongoingApp = dayApps.find(a => {
     if (a.masterId !== master.id || a.status === 'cancelled') return false;
     const aStart = timeToMin(a.time);
@@ -279,10 +280,35 @@ function renderDayMasterCell(master, dateStr, slotTime, slotMin, dayApps, timeBl
     return slotMin > aStart && slotMin < aEnd;
   });
   if (ongoingApp) {
-    return `<div class="w-full h-full min-h-[44px] cursor-pointer" data-edit-booking="${ongoingApp.id}"></div>`;
+    const srv = (ongoingApp.serviceIds || []).map(id => state.db.services.find(x => x.id === id)).filter(Boolean)[0];
+    const srvColor = srv?.color || '#63ade2';
+    const aEnd = timeToMin(ongoingApp.time) + Number(ongoingApp.duration || 60);
+    const isLastSlot = (slotMin + 30 >= aEnd);
+
+    if (isLastSlot) {
+      return `
+        <div class="w-full h-full min-h-[44px] p-2 rounded-b-xl border-b border-x border-l-4 border-t-0 flex items-center justify-between text-xs cursor-pointer select-none transition hover:brightness-95"
+             style="background-color: ${srvColor}18; border-color: ${srvColor}55; border-left-color: ${srvColor};"
+             data-edit-booking="${ongoingApp.id}">
+          <span class="text-[11px] font-semibold truncate" style="color: ${srvColor}; filter: brightness(0.65);">
+            Зайнято: ${ongoingApp.clientName} (до ${minToTime(aEnd)})
+          </span>
+        </div>
+      `;
+    } else {
+      return `
+        <div class="w-full h-full min-h-[44px] p-2 border-x border-l-4 border-t-0 border-b-0 flex items-center text-xs cursor-pointer select-none transition hover:brightness-95"
+             style="background-color: ${srvColor}18; border-color: ${srvColor}55; border-left-color: ${srvColor};"
+             data-edit-booking="${ongoingApp.id}">
+          <span class="text-[11px] font-semibold truncate" style="color: ${srvColor}; filter: brightness(0.65);">
+            Зайнято: ${ongoingApp.clientName}
+          </span>
+        </div>
+      `;
+    }
   }
 
-  // 5. Регулярна перерва (обід) — один слотом на час початку, без повторів
+  // 5. Регулярна перерва (обід) — займає всі слоти на час перерви (наприклад, 14:00 та 14:30 до 15:00)
   const regularBreak = (sched.regularBreaks || []).find(b => {
     const bs = timeToMin(b.start);
     const be = timeToMin(b.end);
@@ -301,20 +327,25 @@ function renderDayMasterCell(master, dateStr, slotTime, slotMin, dayApps, timeBl
     });
 
     if (!lunchReplaced) {
+      const isMulti = (be - bs > 30);
       if (slotMin === bs) {
         return `
-          <div class="w-full h-full min-h-[44px] rounded-xl bg-amber-50/80 border border-dashed border-amber-200 flex items-center justify-center text-amber-800 text-xs font-medium select-none">
+          <div class="w-full h-full min-h-[44px] ${isMulti ? 'rounded-t-xl border-t border-x border-dashed border-amber-300 border-b-0' : 'rounded-xl border border-dashed border-amber-300'} bg-amber-50/80 flex items-center justify-center text-amber-800 text-xs font-semibold select-none">
             ☕ ${regularBreak.name || 'Обід'} (${regularBreak.start}–${regularBreak.end})
           </div>
         `;
       } else {
-        // Продовження обіду не дублюється текстом
-        return `<div class="w-full h-full min-h-[44px]"></div>`;
+        const isLast = (slotMin + 30 >= be);
+        return `
+          <div class="w-full h-full min-h-[44px] ${isLast ? 'rounded-b-xl border-b' : ''} border-x border-dashed border-amber-300 border-t-0 bg-amber-50/80 flex items-center justify-center text-amber-800/80 text-xs font-medium select-none">
+            ☕ ${regularBreak.name || 'Обід'} (до ${regularBreak.end})
+          </div>
+        `;
       }
     }
   }
 
-  // 6. Разова перерва (TimeBlock) — один слотом на час початку
+  // 6. Разова перерва (TimeBlock) — займає всі свої слоти
   const tb = timeBlocks.find(b => {
     if (b.masterId !== master.id) return false;
     const bs = timeToMin(b.startTime);
@@ -323,15 +354,22 @@ function renderDayMasterCell(master, dateStr, slotTime, slotMin, dayApps, timeBl
   });
   if (tb) {
     const bs = timeToMin(tb.startTime);
+    const be = timeToMin(tb.endTime);
+    const isMulti = (be - bs > 30);
     if (slotMin === bs) {
       return `
-        <div class="w-full h-full min-h-[44px] p-2 rounded-xl bg-amber-100 border border-amber-300 text-amber-950 flex items-center justify-between text-xs font-semibold shadow-xs">
+        <div class="w-full h-full min-h-[44px] p-2 ${isMulti ? 'rounded-t-xl border-t border-x border-b-0' : 'rounded-xl border'} bg-amber-100 border-amber-300 text-amber-950 flex items-center justify-between text-xs font-semibold shadow-xs">
           <span class="truncate">☕ ${tb.reason} (${tb.startTime}–${tb.endTime})</span>
           <button type="button" data-del-tb-quick="${tb.id}" class="text-amber-800 hover:text-rose-600 px-1.5 font-bold" title="Видалити перерву">✕</button>
         </div>
       `;
     } else {
-      return `<div class="w-full h-full min-h-[44px]"></div>`;
+      const isLast = (slotMin + 30 >= be);
+      return `
+        <div class="w-full h-full min-h-[44px] p-2 ${isLast ? 'rounded-b-xl border-b' : ''} border-x border-t-0 border-amber-300 bg-amber-100 text-amber-950 flex items-center text-xs font-medium">
+          <span class="truncate">☕ ${tb.reason} (до ${tb.endTime})</span>
+        </div>
+      `;
     }
   }
 

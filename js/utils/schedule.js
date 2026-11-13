@@ -104,24 +104,17 @@ export function getMasterBusyIntervals(master, dateStr, db) {
     });
   });
 
-  // 3. Записи клієнтів (bookings) + технічний буфер
+  // 3. Записи клієнтів (bookings)
   const apps = (db.appointments || []).filter(a => a.masterId === master.id && a.date === dateStr && a.status !== 'cancelled');
   apps.forEach(a => {
     const startMin = timeToMin(a.time);
     const dur = Number(a.duration) || 60;
-    // Буфер з послуги або глобальний буфер майстра
-    let buf = a.bufferTime;
-    if (buf === undefined) {
-      const srv = (db.services || []).find(s => a.serviceIds && a.serviceIds.includes(s.id));
-      buf = srv && srv.bufferTime !== undefined ? Number(srv.bufferTime) : Number(master.globalBuffer || 15);
-    }
-    buf = Number(buf) || 0;
 
     intervals.push({
       startMin,
       serviceEndMin: startMin + dur,
-      endMin: startMin + dur + buf, // Повне зайняте вікно з буфером
-      bufferMin: buf,
+      endMin: startMin + dur, // Зайнятий інтервал за фактичною тривалістю процедури
+      bufferMin: 0,
       type: 'booking',
       label: a.clientName || 'Запис',
       ref: a
@@ -155,12 +148,8 @@ export function calculateAvailableSlots(master, services, dateStr, db) {
 
   // Тривалість усіх обраних послуг
   const totalDuration = services.reduce((acc, s) => acc + Number(s.duration || 60), 0) || 60;
-
-  // Технічний перерва (буфер) після послуг: беремо максимальний буфер з обраних послуг або глобальний буфер майстра
-  const maxServiceBuffer = services.reduce((acc, s) => Math.max(acc, Number(s.bufferTime !== undefined ? s.bufferTime : 0)), 0);
-  const buffer = maxServiceBuffer > 0 ? maxServiceBuffer : (Number(master.globalBuffer) || 15);
-
-  const totalNeeded = totalDuration + buffer;
+  const buffer = 0;
+  const totalNeeded = totalDuration;
   const slotStep = Number(master.slotStep) || 30;
   const busyIntervals = getMasterBusyIntervals(master, dateStr, db);
 
