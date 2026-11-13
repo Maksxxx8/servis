@@ -511,12 +511,16 @@ class CRM_DB {
                 ");
 
                 $stmtClient = $this->pdo->prepare("
-                    INSERT INTO clients (id, name, phone, email, notes, created_at, updated_at)
-                    VALUES (:id, :name, :phone, :email, :notes, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    ON CONFLICT(phone) DO UPDATE SET 
-                        name = excluded.name,
-                        email = excluded.email,
-                        updated_at = CURRENT_TIMESTAMP
+                    INSERT OR REPLACE INTO clients (id, name, phone, email, notes, created_at, updated_at)
+                    VALUES (
+                        :id, 
+                        :name, 
+                        :phone, 
+                        :email, 
+                        :notes, 
+                        COALESCE((SELECT created_at FROM clients WHERE id = :id OR phone = :phone LIMIT 1), CURRENT_TIMESTAMP), 
+                        CURRENT_TIMESTAMP
+                    )
                 ");
 
                 $allAppIds = [];
@@ -524,17 +528,22 @@ class CRM_DB {
                     if (empty($a['id'])) continue;
                     $allAppIds[] = $a['id'];
 
-                    $clientPhone = $a['clientPhone'] ?? ($a['client_phone'] ?? '');
-                    $clientEmail = $a['clientEmail'] ?? ($a['client_email'] ?? '');
-                    $clientId = 'c_' . preg_replace('/[^\d]/', '', $clientPhone);
+                    $clientPhone = trim($a['clientPhone'] ?? ($a['client_phone'] ?? ''));
+                    $clientEmail = trim($a['clientEmail'] ?? ($a['client_email'] ?? ''));
+                    $digits = preg_replace('/[^\d]/', '', $clientPhone);
+                    $clientId = !empty($digits) ? 'c_' . $digits : ('c_' . md5($clientPhone . ($a['clientName'] ?? '')));
                     if (!empty($clientPhone)) {
-                        $stmtClient->execute([
-                            ':id' => $clientId,
-                            ':name' => $a['clientName'] ?? ($a['client_name'] ?? 'Клієнт'),
-                            ':phone' => $clientPhone,
-                            ':email' => $clientEmail,
-                            ':notes' => $a['notes'] ?? ''
-                        ]);
+                        try {
+                            $stmtClient->execute([
+                                ':id' => $clientId,
+                                ':name' => $a['clientName'] ?? ($a['client_name'] ?? 'Клієнт'),
+                                ':phone' => $clientPhone,
+                                ':email' => $clientEmail,
+                                ':notes' => $a['notes'] ?? ''
+                            ]);
+                        } catch (Exception $ce) {
+                            error_log("Помилка синхронізації клієнта $clientId: " . $ce->getMessage());
+                        }
                     }
 
                     $incomingGid = $a['googleEventId'] ?? ($a['google_event_id'] ?? null);

@@ -83,6 +83,138 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['act
     exit;
 }
 
+/**
+ * Універсальна функція відправки email (SMTP або локальний mail())
+ */
+function sendStudioEmail(string $to, string $subject, string $htmlBody, array $smtpConfig = []): array {
+    $host = trim($smtpConfig['host'] ?? ($smtpConfig['smtpHost'] ?? ''));
+    $port = (int)($smtpConfig['port'] ?? ($smtpConfig['smtpPort'] ?? 465));
+    $user = trim($smtpConfig['user'] ?? ($smtpConfig['smtpUser'] ?? ''));
+    $pass = trim($smtpConfig['pass'] ?? ($smtpConfig['smtpPass'] ?? ''));
+    $fromEmail = !empty($smtpConfig['from']) ? trim($smtpConfig['from']) : ($user ?: 'noreply@' . ($_SERVER['SERVER_NAME'] ?? 'beauty.studio'));
+    $fromName = !empty($smtpConfig['from_name']) ? trim($smtpConfig['from_name']) : 'Beauty Studio';
+
+    // 1. Якщо налаштовано SMTP — пряма відправка через сокет
+    if (!empty($host) && !empty($user) && !empty($pass)) {
+        try {
+            $prefix = ($port == 465) ? 'ssl://' : '';
+            $socket = @fsockopen($prefix . $host, $port, $errno, $errstr, 10);
+            if (!$socket) {
+                return ['ok' => false, 'method' => 'SMTP', 'error' => "Не вдалося з'єднатися з SMTP $host:$port ($errstr)"];
+            }
+
+            $read = function() use ($socket) {
+                $res = '';
+                while ($str = fgets($socket, 515)) {
+                    $res .= $str;
+                    if (substr($str, 3, 1) === ' ') break;
+                }
+                return $res;
+            };
+            $write = function($cmd) use ($socket) {
+                fputs($socket, $cmd . "\r\n");
+            };
+
+            $read();
+            $write("EHLO " . ($_SERVER['SERVER_NAME'] ?? 'localhost'));
+            $read();
+
+            if ($port == 587) {
+                $write("STARTTLS");
+                $read();
+                stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
+                $write("EHLO " . ($_SERVER['SERVER_NAME'] ?? 'localhost'));
+                $read();
+            }
+
+            $write("AUTH LOGIN");
+            $read();
+            $write(base64_encode($user));
+            $read();
+            $write(base64_encode($pass));
+            $authRes = $read();
+            if (substr($authRes, 0, 3) !== '235') {
+                fclose($socket);
+                return ['ok' => false, 'method' => 'SMTP', 'error' => "Помилка авторизації SMTP: " . trim($authRes)];
+            }
+
+            $write("MAIL FROM: <$fromEmail>");
+            $read();
+            $write("RCPT TO: <$to>");
+            $read();
+            $write("DATA");
+            $read();
+
+            $headers = "MIME-Version: 1.0\r\n";
+            $headers .= "Content-Type: text/html; charset=UTF-8\r\n";
+            $headers .= "From: =?UTF-8?B?" . base64_encode($fromName) . "?= <$fromEmail>\r\n";
+            $headers .= "To: <$to>\r\n";
+            $headers .= "Subject: =?UTF-8?B?" . base64_encode($subject) . "?=\r\n";
+            $headers .= "Date: " . date('r') . "\r\n";
+
+            $write($headers . "\r\n" . $htmlBody . "\r\n.");
+            $dataRes = $read();
+            $write("QUIT");
+            fclose($socket);
+
+            $ok = substr($dataRes, 0, 3) === '250';
+            return ['ok' => $ok, 'method' => 'SMTP', 'response' => trim($dataRes)];
+        } catch (Exception $e) {
+            return ['ok' => false, 'method' => 'SMTP', 'error' => $e->getMessage()];
+        }
+    }
+
+    // 2. Локальний агент сервера mail()
+    $encodedSubject = "=?UTF-8?B?" . base64_encode($subject) . "?=";
+    $headers = "MIME-Version: 1.0\r\n";
+    $headers .= "Content-type: text/html; charset=utf-8\r\n";
+    $headers .= "From: =?UTF-8?B?" . base64_encode($fromName) . "?= <$fromEmail>\r\n";
+
+    $sent = @mail($to, $encodedSubject, $htmlBody, $headers);
+    return [
+        'ok' => (bool)$sent,
+        'method' => 'mail()',
+        'error' => $sent ? null : 'Функція mail() повернула false. Перевірте, чи встановлено поштовий агент (postfix).'
+    ];
+}
+
+// Тест відправки пошти: api-v2.php?action=test_email&email=vash@email.com
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'test_email') {
+    header('Content-Type: application/json; charset=utf-8');
+    $to = trim($_GET['email'] ?? '');
+    if (empty($to)) {
+        echo json_encode([
+            'ok' => false, 
+            'error' => "Будь ласка, вкажіть email для тесту, наприклад: api-v2.php?action=test_email&email=your@gmail.com"
+        ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        exit;
+    }
+
+    $subject = "Тестове повідомлення від Beauty Studio CRM";
+    $body = "<div style='font-family: sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 12px;'>
+        <h2 style='color: #4f46e5;'>Beauty Studio CRM</h2>
+        <p>Це тестовий лист для перевірки поштового сервера вашої CRM.</p>
+        <p><b>Час відправки:</b> " . date('Y-m-d H:i:s') . "</p>
+        <p style='color: #16a34a; font-weight: bold;'>✅ Пошта працює коректно!</p>
+    </div>";
+
+    $fullState = $db->getState();
+    $salonSettings = $fullState['salon'] ?? [];
+    $res = sendStudioEmail($to, $subject, $body, $salonSettings);
+
+    echo json_encode([
+        'ok' => $res['ok'],
+        'method' => $res['method'] ?? 'mail()',
+        'target_email' => $to,
+        'php_sendmail_path' => ini_get('sendmail_path'),
+        'details' => $res,
+        'recommendation' => $res['ok'] 
+            ? 'Лист успішно відправлено! Перевірте Вхідні та папку Спам.' 
+            : 'Помилка відправки. На сервері виконайте: sudo apt update && sudo apt install -y postfix mailutils'
+    ], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    exit;
+}
+
 // Верифікація запису клієнта через Email: api-v2.php?action=verify_booking&token=...
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] === 'verify_booking') {
     $token = trim($_GET['token'] ?? '');
@@ -357,7 +489,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $scriptPath = $_SERVER['SCRIPT_NAME'] ?? '/api-v2.php';
                 $verifyUrl = "{$protocol}{$host}{$scriptPath}?action=verify_booking&token={$vToken}";
 
-                $subject = "=?UTF-8?B?" . base64_encode("Підтвердження запису в Beauty Studio") . "?=";
+                $subject = "Підтвердження запису в Beauty Studio";
                 $htmlBody = "
                 <div style='font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px; background-color: #ffffff;'>
                     <h2 style='color: #4f46e5; margin-top: 0;'>Beauty Studio</h2>
@@ -375,15 +507,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <p style='font-size: 12px; color: #64748b;'>Або скопіюйте посилання у браузер:<br><a href='{$verifyUrl}' style='color: #4f46e5;'>{$verifyUrl}</a></p>
                 </div>";
 
-                $headers = "MIME-Version: 1.0\r\n";
-                $headers .= "Content-type: text/html; charset=utf-8\r\n";
-                $headers .= "From: Beauty Studio <noreply@" . ($_SERVER['SERVER_NAME'] ?? 'beauty.studio') . ">\r\n";
-
-                $mailSent = @mail($vEmail, $subject, $htmlBody, $headers);
+                $salonSettings = $data['salon'] ?? [];
+                $sendRes = sendStudioEmail($vEmail, $subject, $htmlBody, $salonSettings);
                 $verificationData = [
                     'token' => $vToken,
                     'verify_url' => $verifyUrl,
-                    'email_sent' => (bool)$mailSent
+                    'email_sent' => (bool)$sendRes['ok'],
+                    'method' => $sendRes['method'] ?? 'mail()',
+                    'error' => $sendRes['error'] ?? null
                 ];
             }
             unset($data['_send_verification_email']);
