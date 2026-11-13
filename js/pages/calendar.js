@@ -150,7 +150,7 @@ function updateRevenueSummary() {
   }
 }
 
-// =================== 1. РЕЖИМ «ДЕНЬ» ===================
+// =================== 1. РЕЖИМ «ДЕНЬ» (Монолітний розклад як у Google Календарі) ===================
 
 function renderDayView(container) {
   const masters = masterFilter === 'all'
@@ -160,9 +160,18 @@ function renderDayView(container) {
   const dayApps = state.db.appointments.filter(a => a.date === currentDateStr);
   const timeBlocks = (state.db.timeBlocks || []).filter(tb => tb.date === currentDateStr);
 
+  const START_HOUR = 8;
+  const END_HOUR = 21;
+  const SLOT_STEP = 30; // хвилини
+  const SLOT_HEIGHT = 56; // пікселі на 30 хвилин
+  const TOTAL_SLOTS = (END_HOUR - START_HOUR) * 2; // 26 слотів
+  const TOTAL_HEIGHT = TOTAL_SLOTS * SLOT_HEIGHT; // 1456 px
+  const START_MIN = START_HOUR * 60; // 480
+  const END_MIN = END_HOUR * 60; // 1260
+
   const gridColsStyle = `grid-cols-[64px_repeat(${masters.length},_minmax(0,_1fr))]`;
 
-  // Шапка колонок
+  // 1. Шапка колонок майстрів
   const headerCols = masters.map((m, idx) => {
     const sched = getMasterDaySchedule(m, currentDateStr);
     const borderR = (idx < masters.length - 1) ? 'border-r border-slate-200' : '';
@@ -180,206 +189,248 @@ function renderDayView(container) {
     `;
   }).join('');
 
-  // Сітка годин 08:00 - 21:00
-  const rows = [];
-  for (let m = 8 * 60; m < 21 * 60; m += 30) {
-    const t = minToTime(m);
-    const cells = masters.map((master, idx) => {
-      const borderR = (idx < masters.length - 1) ? 'border-r border-slate-100' : '';
-      const cellContent = renderDayMasterCell(master, currentDateStr, t, m, dayApps, timeBlocks);
-      return `<div class="p-1.5 ${borderR} min-w-0">${cellContent}</div>`;
-    }).join('');
-
-    rows.push(`
-      <div class="grid ${gridColsStyle} min-h-[56px] border-b border-slate-100 last:border-b-0">
-        <div class="p-2 text-center text-slate-400 font-mono text-xs border-r border-slate-100 flex items-center justify-center bg-slate-50/50">${t}</div>
-        ${cells}
+  // 2. Колонка часових позначок (08:00 - 20:30)
+  const timeSlots = [];
+  for (let i = 0; i < TOTAL_SLOTS; i++) {
+    const t = minToTime(START_MIN + i * SLOT_STEP);
+    timeSlots.push(`
+      <div class="h-[56px] border-b border-slate-100 text-center text-slate-400 font-mono text-xs flex items-center justify-center bg-slate-50/50">
+        ${t}
       </div>
     `);
   }
 
+  // 3. Колонки майстрів з монолітними вікнами записів та обіду
+  const masterColumns = masters.map((master, idx) => {
+    const borderR = (idx < masters.length - 1) ? 'border-r border-slate-100' : '';
+    const sched = getMasterDaySchedule(master, currentDateStr);
+    const workStartMin = timeToMin(sched.workStart);
+    const workEndMin = timeToMin(sched.workEnd);
+
+    // А. Фонові клітинки слотів для кліку "+ Записати"
+    const bgSlots = [];
+    for (let i = 0; i < TOTAL_SLOTS; i++) {
+      const slotMin = START_MIN + i * SLOT_STEP;
+      const t = minToTime(slotMin);
+      const isWorkingHour = sched.isWorking && slotMin >= workStartMin && slotMin < workEndMin;
+
+      if (!sched.isWorking) {
+        bgSlots.push(`
+          <div class="h-[56px] border-b border-slate-100 bg-slate-50/40"></div>
+        `);
+      } else if (!isWorkingHour) {
+        bgSlots.push(`
+          <div class="h-[56px] border-b border-slate-100 bg-slate-50/50 flex items-center justify-center text-slate-300 text-[10px] select-none">
+            Неробочий час
+          </div>
+        `);
+      } else {
+        bgSlots.push(`
+          <div class="h-[56px] border-b border-slate-100 p-1 flex items-center">
+            <button type="button" data-slot-action="${master.id}|${currentDateStr}|${t}" class="w-full h-full rounded-xl hover:bg-indigo-50/50 text-transparent hover:text-indigo-600 text-left px-2.5 transition flex items-center justify-between group border border-transparent hover:border-indigo-200">
+              <span class="text-xs font-semibold">+ Записати на ${t}</span>
+              <span class="text-[11px] opacity-0 group-hover:opacity-100 text-indigo-400">☕ перерва</span>
+            </button>
+          </div>
+        `);
+      }
+    }
+
+    // Б. Монолітні картки подій поверх сітки (як в Google Календарі)
+    const cards = [];
+
+    // 1) Записи клієнтів (єдине монолітне вікно на весь час процедури)
+    const masterApps = dayApps
+      .filter(a => a.masterId === master.id && a.status !== 'cancelled')
+      .sort((a, b) => timeToMin(a.time) - timeToMin(b.time));
+
+    const appPositions = masterApps.map(app => {
+      const aStart = timeToMin(app.time);
+      const aEnd = aStart + Math.max(15, Number(app.duration) || 60);
+      const overlaps = masterApps.filter(o => {
+        if (o.id === app.id) return false;
+        const oStart = timeToMin(o.time);
+        const oEnd = oStart + Math.max(15, Number(o.duration) || 60);
+        return Math.max(aStart, oStart) < Math.min(aEnd, oEnd);
+      });
+
+      if (overlaps.length > 0) {
+        const group = [app, ...overlaps].sort((a, b) => timeToMin(a.time) - timeToMin(b.time) || a.id.localeCompare(b.id));
+        const idxInGroup = group.findIndex(x => x.id === app.id);
+        const totalInGroup = Math.min(group.length, 3);
+        const colIdx = idxInGroup % totalInGroup;
+        const widthPct = (100 / totalInGroup).toFixed(1);
+        return {
+          app,
+          left: `calc(${colIdx * widthPct}% + 4px)`,
+          width: `calc(${widthPct}% - 8px)`
+        };
+      }
+
+      return {
+        app,
+        left: '6px',
+        width: 'calc(100% - 12px)'
+      };
+    });
+
+    appPositions.forEach(({ app, left, width }) => {
+      const aStart = timeToMin(app.time);
+      const dur = Math.max(15, Number(app.duration) || 60);
+      const aEnd = aStart + dur;
+
+      if (aEnd <= START_MIN || aStart >= END_MIN) return;
+
+      const top = Math.max(0, ((aStart - START_MIN) / 30) * SLOT_HEIGHT) + 2;
+      const bottom = Math.min(TOTAL_HEIGHT, ((aEnd - START_MIN) / 30) * SLOT_HEIGHT) - 2;
+      const height = Math.max(34, bottom - top);
+
+      const srv = (app.serviceIds || []).map(id => state.db.services.find(x => x.id === id)).filter(Boolean)[0];
+      const srvColor = srv?.color || '#63ade2';
+      const srvDesc = srv ? srv.title : 'Послуга салону';
+
+      cards.push(`
+        <div class="absolute rounded-xl p-2.5 border border-l-4 shadow-xs hover:shadow-md cursor-pointer z-10 transition flex flex-col justify-between overflow-hidden group select-none"
+             style="top: ${top}px; height: ${height}px; left: ${left}; width: ${width}; background-color: ${srvColor}18; border-color: ${srvColor}55; border-left-color: ${srvColor};"
+             data-edit-booking="${app.id}">
+          <div class="min-w-0">
+            <div class="flex items-center justify-between font-bold text-slate-900 leading-tight">
+              <div class="flex items-center gap-1.5 truncate">
+                <span class="w-2.5 h-2.5 rounded-full shrink-0 shadow-xs" style="background-color: ${srvColor};"></span>
+                <span class="truncate text-xs">${app.clientName}</span>
+              </div>
+              <span class="font-extrabold text-xs whitespace-nowrap ml-1 text-slate-800">${app.price} ₴</span>
+            </div>
+
+            <div class="text-[11px] font-semibold truncate mt-1" style="color: ${srvColor}; filter: brightness(0.65);">
+              ✨ ${srvDesc} (${app.duration} хв)
+            </div>
+
+            ${height >= 75 ? `
+              <div class="text-[11px] text-slate-600 mt-1 flex items-center justify-between">
+                <span class="font-mono font-medium">📞 ${app.clientPhone}</span>
+                <span class="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-white/90 border border-slate-200">${app.status}</span>
+              </div>
+            ` : ''}
+
+            ${height >= 115 && app.notes ? `<div class="text-[10px] text-slate-500 mt-1 truncate">📝 ${app.notes}</div>` : ''}
+          </div>
+
+          <div class="text-[10px] font-mono font-medium pt-1 text-slate-500 flex items-center justify-between border-t border-slate-200/50 mt-1">
+            <span>🕒 ${app.time} – ${minToTime(aEnd)}</span>
+            ${height < 75 ? `<span class="text-[9px] uppercase font-bold px-1 py-0.2 rounded bg-white/80 border border-slate-200">${app.status}</span>` : ''}
+          </div>
+        </div>
+      `);
+    });
+
+    // 2) Регулярний обід (монолітне вікно на весь інтервал, якщо не замінено записом)
+    if (sched.isWorking && Array.isArray(sched.regularBreaks)) {
+      sched.regularBreaks.forEach(rb => {
+        const bs = timeToMin(rb.start);
+        const be = timeToMin(rb.end);
+
+        // Якщо на цей час створено/перенесено запис клієнта — обід замінено
+        const lunchReplaced = dayApps.some(a => {
+          if (a.masterId !== master.id || a.status === 'cancelled') return false;
+          const aStart = timeToMin(a.time);
+          const aEnd = aStart + Number(a.duration || 60);
+          return Math.max(aStart, bs) < Math.min(aEnd, be);
+        });
+
+        if (!lunchReplaced) {
+          const top = Math.max(0, ((bs - START_MIN) / 30) * SLOT_HEIGHT) + 2;
+          const bottom = Math.min(TOTAL_HEIGHT, ((be - START_MIN) / 30) * SLOT_HEIGHT) - 2;
+          const height = Math.max(34, bottom - top);
+
+          cards.push(`
+            <div class="absolute rounded-xl bg-amber-50/90 border border-dashed border-amber-300 flex flex-col items-center justify-center text-amber-800 text-xs font-semibold select-none shadow-2xs z-10 p-2"
+                 style="top: ${top}px; height: ${height}px; left: 6px; width: calc(100% - 12px);">
+              <span class="flex items-center gap-1 font-bold text-xs">☕ ${rb.name || 'Обід'}</span>
+              <span class="text-[11px] font-mono font-medium opacity-75 mt-0.5">${rb.start} – ${rb.end}</span>
+            </div>
+          `);
+        }
+      });
+    }
+
+    // 3) Разові перерви (TimeBlocks)
+    timeBlocks.filter(tb => tb.masterId === master.id).forEach(tb => {
+      const bs = timeToMin(tb.startTime);
+      const be = timeToMin(tb.endTime);
+      const top = Math.max(0, ((bs - START_MIN) / 30) * SLOT_HEIGHT) + 2;
+      const bottom = Math.min(TOTAL_HEIGHT, ((be - START_MIN) / 30) * SLOT_HEIGHT) - 2;
+      const height = Math.max(34, bottom - top);
+
+      cards.push(`
+        <div class="absolute rounded-xl bg-amber-100 border border-amber-300 text-amber-950 flex flex-col justify-between text-xs font-semibold shadow-xs z-10 p-2 overflow-hidden select-none"
+             style="top: ${top}px; height: ${height}px; left: 6px; width: calc(100% - 12px);">
+          <div class="flex items-center justify-between">
+            <span class="truncate">☕ ${tb.reason}</span>
+            <button type="button" data-del-tb-quick="${tb.id}" class="text-amber-800 hover:text-rose-600 px-1.5 font-bold" title="Видалити перерву">✕</button>
+          </div>
+          <div class="text-[11px] font-mono text-amber-900/70 pt-1 border-t border-amber-200/60 mt-1">
+            🕒 ${tb.startTime} – ${tb.endTime}
+          </div>
+        </div>
+      `);
+    });
+
+    // 4) Оверлей вихідного дня
+    if (!sched.isWorking) {
+      cards.push(`
+        <div class="absolute inset-2 rounded-2xl bg-slate-100/80 border border-dashed border-slate-200 flex flex-col items-center justify-center text-slate-400 text-xs font-semibold select-none z-10 pointer-events-none">
+          <span class="text-3xl mb-1.5">🏖️</span>
+          <span>Вихідний день</span>
+        </div>
+      `);
+    }
+
+    return `
+      <div class="relative ${borderR} min-w-0" style="height: ${TOTAL_HEIGHT}px;">
+        <div class="absolute inset-0 flex flex-col">
+          ${bgSlots.join('')}
+        </div>
+        ${cards.join('')}
+      </div>
+    `;
+  }).join('');
+
+  // Червона лінія поточного часу (Current Time Indicator, як в Google Календарі)
+  let currentTimeIndicator = '';
+  if (currentDateStr === todayStr) {
+    const now = new Date();
+    const curMin = now.getHours() * 60 + now.getMinutes();
+    if (curMin >= START_MIN && curMin <= END_MIN) {
+      const curTop = ((curMin - START_MIN) / 30) * SLOT_HEIGHT;
+      currentTimeIndicator = `
+        <div class="absolute left-0 right-0 pointer-events-none z-20 flex items-center" style="top: ${curTop}px;">
+          <div class="w-16 flex justify-end pr-1">
+            <span class="w-2.5 h-2.5 rounded-full bg-rose-500 shadow-xs"></span>
+          </div>
+          <div class="flex-1 border-t-2 border-rose-500 shadow-xs"></div>
+        </div>
+      `;
+    }
+  }
+
   container.innerHTML = `
-    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-      <div class="grid ${gridColsStyle} bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600">
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden overflow-x-auto">
+      <div class="grid ${gridColsStyle} bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600 sticky top-0 z-30">
         <div class="p-3 text-center border-r border-slate-200">Час</div>
         ${headerCols}
       </div>
-      <div class="divide-y divide-slate-100 text-xs">
-        ${rows.join('')}
+      <div class="grid ${gridColsStyle} relative">
+        <div class="border-r border-slate-200 bg-slate-50/30 flex flex-col">
+          ${timeSlots.join('')}
+        </div>
+        ${masterColumns}
+        ${currentTimeIndicator}
       </div>
     </div>
   `;
 
   bindDayEvents(container);
-}
-
-function renderDayMasterCell(master, dateStr, slotTime, slotMin, dayApps, timeBlocks) {
-  const sched = getMasterDaySchedule(master, dateStr);
-
-  // 1. Якщо день вихідний
-  if (!sched.isWorking) {
-    return `
-      <div class="w-full h-full min-h-[44px] rounded-lg bg-slate-100/70 border border-dashed border-slate-200 flex items-center justify-center text-slate-400 text-[11px] select-none">
-        🏖️ Вихідний
-      </div>
-    `;
-  }
-
-  const workStartMin = timeToMin(sched.workStart);
-  const workEndMin = timeToMin(sched.workEnd);
-
-  // 2. Неробочі години (до початку або після кінця)
-  if (slotMin < workStartMin || slotMin >= workEndMin) {
-    return `
-      <div class="w-full h-full min-h-[44px] rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-300 text-[10px] select-none">
-        Неробочий час
-      </div>
-    `;
-  }
-
-  // 3. Запис клієнта, що починається на цей слот
-  const app = dayApps.find(a => a.masterId === master.id && a.time === slotTime && a.status !== 'cancelled');
-  if (app) {
-    const srv = (app.serviceIds || []).map(id => state.db.services.find(x => x.id === id)).filter(Boolean)[0];
-    const srvColor = srv?.color || '#63ade2';
-    const srvDesc = srv ? srv.title : 'Послуга салону';
-    const isMultiSlot = (Number(app.duration || 60) > 30);
-
-    return `
-      <div class="flex flex-col shadow-xs group cursor-pointer transition hover:shadow-md" data-edit-booking="${app.id}">
-        <!-- Основна картка візиту з кольором послуги -->
-        <div class="p-2.5 ${isMultiSlot ? 'rounded-t-xl border-t border-x border-l-4 border-b-0' : 'rounded-xl border border-l-4'} transition"
-             style="background-color: ${srvColor}18; border-color: ${srvColor}55; border-left-color: ${srvColor};">
-          <div class="flex items-center justify-between font-bold text-slate-900">
-            <div class="flex items-center gap-1.5 truncate">
-              <span class="w-2.5 h-2.5 rounded-full shrink-0 shadow-xs" style="background-color: ${srvColor};"></span>
-              <span class="truncate">${app.clientName}</span>
-            </div>
-            <span class="font-extrabold text-xs whitespace-nowrap ml-1 text-slate-800">${app.price} ₴</span>
-          </div>
-          
-          <div class="text-[11px] font-semibold truncate mt-1" style="color: ${srvColor}; filter: brightness(0.65);">
-            ✨ ${srvDesc} (${app.duration} хв)
-          </div>
-
-          <div class="text-[11px] text-slate-600 mt-1 flex items-center justify-between">
-            <span class="font-mono font-medium">📞 ${app.clientPhone}</span>
-            <span class="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-white/90 border border-slate-200">${app.status}</span>
-          </div>
-          ${app.notes ? `<div class="text-[10px] text-slate-500 mt-1 truncate">📝 ${app.notes}</div>` : ''}
-        </div>
-      </div>
-    `;
-  }
-
-  // 4. Триваючий запис клієнта (слоти процедури після початку до її закінчення)
-  const ongoingApp = dayApps.find(a => {
-    if (a.masterId !== master.id || a.status === 'cancelled') return false;
-    const aStart = timeToMin(a.time);
-    const aEnd = aStart + Number(a.duration || 60);
-    return slotMin > aStart && slotMin < aEnd;
-  });
-  if (ongoingApp) {
-    const srv = (ongoingApp.serviceIds || []).map(id => state.db.services.find(x => x.id === id)).filter(Boolean)[0];
-    const srvColor = srv?.color || '#63ade2';
-    const aEnd = timeToMin(ongoingApp.time) + Number(ongoingApp.duration || 60);
-    const isLastSlot = (slotMin + 30 >= aEnd);
-
-    if (isLastSlot) {
-      return `
-        <div class="w-full h-full min-h-[44px] p-2 rounded-b-xl border-b border-x border-l-4 border-t-0 flex items-center justify-between text-xs cursor-pointer select-none transition hover:brightness-95"
-             style="background-color: ${srvColor}18; border-color: ${srvColor}55; border-left-color: ${srvColor};"
-             data-edit-booking="${ongoingApp.id}">
-          <span class="text-[11px] font-semibold truncate" style="color: ${srvColor}; filter: brightness(0.65);">
-            Зайнято: ${ongoingApp.clientName} (до ${minToTime(aEnd)})
-          </span>
-        </div>
-      `;
-    } else {
-      return `
-        <div class="w-full h-full min-h-[44px] p-2 border-x border-l-4 border-t-0 border-b-0 flex items-center text-xs cursor-pointer select-none transition hover:brightness-95"
-             style="background-color: ${srvColor}18; border-color: ${srvColor}55; border-left-color: ${srvColor};"
-             data-edit-booking="${ongoingApp.id}">
-          <span class="text-[11px] font-semibold truncate" style="color: ${srvColor}; filter: brightness(0.65);">
-            Зайнято: ${ongoingApp.clientName}
-          </span>
-        </div>
-      `;
-    }
-  }
-
-  // 5. Регулярна перерва (обід) — займає всі слоти на час перерви (наприклад, 14:00 та 14:30 до 15:00)
-  const regularBreak = (sched.regularBreaks || []).find(b => {
-    const bs = timeToMin(b.start);
-    const be = timeToMin(b.end);
-    return slotMin >= bs && slotMin < be;
-  });
-  if (regularBreak) {
-    const bs = timeToMin(regularBreak.start);
-    const be = timeToMin(regularBreak.end);
-
-    // Якщо на цей час призначено запис клієнта (обід замінено записом) — не показуємо обід
-    const lunchReplaced = dayApps.some(a => {
-      if (a.masterId !== master.id || a.status === 'cancelled') return false;
-      const aStart = timeToMin(a.time);
-      const aEnd = aStart + Number(a.duration || 60);
-      return Math.max(aStart, bs) < Math.min(aEnd, be);
-    });
-
-    if (!lunchReplaced) {
-      const isMulti = (be - bs > 30);
-      if (slotMin === bs) {
-        return `
-          <div class="w-full h-full min-h-[44px] ${isMulti ? 'rounded-t-xl border-t border-x border-dashed border-amber-300 border-b-0' : 'rounded-xl border border-dashed border-amber-300'} bg-amber-50/80 flex items-center justify-center text-amber-800 text-xs font-semibold select-none">
-            ☕ ${regularBreak.name || 'Обід'} (${regularBreak.start}–${regularBreak.end})
-          </div>
-        `;
-      } else {
-        const isLast = (slotMin + 30 >= be);
-        return `
-          <div class="w-full h-full min-h-[44px] ${isLast ? 'rounded-b-xl border-b' : ''} border-x border-dashed border-amber-300 border-t-0 bg-amber-50/80 flex items-center justify-center text-amber-800/80 text-xs font-medium select-none">
-            ☕ ${regularBreak.name || 'Обід'} (до ${regularBreak.end})
-          </div>
-        `;
-      }
-    }
-  }
-
-  // 6. Разова перерва (TimeBlock) — займає всі свої слоти
-  const tb = timeBlocks.find(b => {
-    if (b.masterId !== master.id) return false;
-    const bs = timeToMin(b.startTime);
-    const be = timeToMin(b.endTime);
-    return slotMin >= bs && slotMin < be;
-  });
-  if (tb) {
-    const bs = timeToMin(tb.startTime);
-    const be = timeToMin(tb.endTime);
-    const isMulti = (be - bs > 30);
-    if (slotMin === bs) {
-      return `
-        <div class="w-full h-full min-h-[44px] p-2 ${isMulti ? 'rounded-t-xl border-t border-x border-b-0' : 'rounded-xl border'} bg-amber-100 border-amber-300 text-amber-950 flex items-center justify-between text-xs font-semibold shadow-xs">
-          <span class="truncate">☕ ${tb.reason} (${tb.startTime}–${tb.endTime})</span>
-          <button type="button" data-del-tb-quick="${tb.id}" class="text-amber-800 hover:text-rose-600 px-1.5 font-bold" title="Видалити перерву">✕</button>
-        </div>
-      `;
-    } else {
-      const isLast = (slotMin + 30 >= be);
-      return `
-        <div class="w-full h-full min-h-[44px] p-2 ${isLast ? 'rounded-b-xl border-b' : ''} border-x border-t-0 border-amber-300 bg-amber-100 text-amber-950 flex items-center text-xs font-medium">
-          <span class="truncate">☕ ${tb.reason} (до ${tb.endTime})</span>
-        </div>
-      `;
-    }
-  }
-
-  // 8. Порожній вільний слот
-  return `
-    <button type="button" data-slot-action="${master.id}|${dateStr}|${slotTime}" class="w-full h-full min-h-[44px] rounded-xl hover:bg-indigo-50/50 text-transparent hover:text-indigo-600 text-left px-2.5 transition flex items-center justify-between group border border-transparent hover:border-indigo-200">
-      <span class="text-xs font-semibold">+ Записати на ${slotTime}</span>
-      <span class="text-[11px] opacity-0 group-hover:opacity-100 text-indigo-400">☕ перерва</span>
-    </button>
-  `;
 }
 
 function bindDayEvents(container) {
