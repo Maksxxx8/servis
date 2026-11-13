@@ -302,8 +302,8 @@ sudo nginx -t && sudo systemctl reload nginx
 1. **Права на файл ключа на сервері**:
    Файл ключа сервісного аккаунту повинен бути доступний для читання веб-сервером (`www-data`):
    ```bash
-   sudo chmod 755 /opt/Keys
-   sudo chmod 644 /opt/Keys/servis-calendar-sync-514520-60482c5cddc7.json
+   sudo chmod 755 /path/to
+   sudo chmod 644 /path/to/service-account.json
    ```
 
 2. **Надання доступу до календаря майстра / салону**:

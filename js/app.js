@@ -29,13 +29,37 @@ async function bootstrap() {
   initSettings();
   initClients();
 
-  // Завантаження бази даних (сервер або локальне сховище)
+  // Серверна перевірка сесії адміністратора за токеном
+  const savedToken = sessionStorage.getItem('salon_admin_token');
+  if (savedToken) {
+    try {
+      const authRes = await fetch(`api-v2.php?action=check_auth&_t=${Date.now()}`, {
+        headers: { 'X-Admin-Token': savedToken }
+      });
+      const authData = await authRes.json().catch(() => null);
+      if (authData && authData.ok && authData.is_admin) {
+        state.isAdmin = true;
+      } else {
+        sessionStorage.removeItem('salon_admin_token');
+        sessionStorage.removeItem('salon_admin_auth');
+        state.isAdmin = false;
+      }
+    } catch (e) {
+      sessionStorage.removeItem('salon_admin_token');
+      sessionStorage.removeItem('salon_admin_auth');
+      state.isAdmin = false;
+    }
+  } else {
+    sessionStorage.removeItem('salon_admin_auth');
+    state.isAdmin = false;
+  }
+
+  // Завантаження бази даних (безпечна публічна або повна адмінська)
   await loadDatabase();
 
-  // Перевірка сесії адміністратора
+  // Навігація при відкритті
   const urlParams = new URLSearchParams(window.location.search);
-  if (sessionStorage.getItem('salon_admin_auth') === '1') {
-    state.isAdmin = true;
+  if (state.isAdmin) {
     showAdminBar();
     switchView('calendar');
   } else if (urlParams.get('admin') === '1' || window.location.hash === '#admin') {

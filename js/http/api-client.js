@@ -18,6 +18,7 @@ let silentSaveNoticeShown = false;
 async function resolveApiEndpoint() {
   const candidates = [activeApiUrl, 'api-v2.php', 'api.php'];
   const cacheBuster = `_t=${Date.now()}`;
+  const adminToken = sessionStorage.getItem('salon_admin_token') || '';
 
   for (const url of candidates) {
     try {
@@ -27,7 +28,8 @@ async function resolveApiEndpoint() {
         cache: 'no-store',
         headers: {
           'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache'
+          'Pragma': 'no-cache',
+          'X-Admin-Token': adminToken
         }
       });
       if (res.ok) {
@@ -71,16 +73,24 @@ export async function loadDatabase(silent = false) {
       state.serverConnected = true;
 
       if (remote && remote.salon && Array.isArray(remote.masters)) {
+        if (typeof remote.isAdmin === 'boolean') {
+          state.isAdmin = remote.isAdmin;
+        }
         const currentJson = JSON.stringify(state.db);
         const remoteJson = JSON.stringify(remote);
 
         if (currentJson !== remoteJson) {
           state.db = remote;
-          localStorage.setItem('salon_crm_db_uk', remoteJson);
+          // Зберігаємо в кеш тільки якщо це публічні дані (без токенів)
+          if (!state.isAdmin) {
+            localStorage.setItem('salon_crm_db_uk', remoteJson);
+          }
           hasChanges = true;
         }
       } else if (remote && remote.status === 'empty') {
-        await saveDatabase();
+        if (state.isAdmin) {
+          await saveDatabase();
+        }
       }
     } else {
       state.serverConnected = false;
@@ -95,11 +105,51 @@ export async function loadDatabase(silent = false) {
 }
 
 /**
- * Зберегти базу даних на сервер та у localStorage
+ * Створити клієнтський онлайн-запис через безпечний публічний ендпоінт
+ */
+export async function createClientBooking(bookingData, honeypot = '') {
+  try {
+    const res = await fetch(`api-v2.php?action=client_booking&_t=${Date.now()}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache'
+      },
+      body: JSON.stringify({
+        booking: bookingData,
+        website: honeypot
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json().catch(() => ({ ok: true }));
+      if (data && data.ok) {
+        state.serverConnected = true;
+        loadDatabase(true);
+        return data;
+      } else {
+        alert('❌ ' + (data?.error || 'Помилка створення запису'));
+        return false;
+      }
+    } else {
+      const err = await res.json().catch(() => null);
+      alert('❌ ' + (err?.error || `Помилка сервера (HTTP ${res.status})`));
+      return false;
+    }
+  } catch (e) {
+    alert('❌ Немає зв\'язку з сервером. Перевірте з\'єднання.');
+    return false;
+  }
+}
+
+/**
+ * Зберегти базу даних на сервер та у localStorage (вимагає прав адміна)
  * @param {Object|null} tgPayload — об'єкт { chatId, message } для Telegram-сповіщення
  */
 export async function saveDatabase(tgPayload = null) {
   try {
+    const adminToken = sessionStorage.getItem('salon_admin_token') || '';
     const payload = JSON.parse(JSON.stringify(state.db));
     if (tgPayload) {
       if (tgPayload.emailPayload) {
@@ -116,7 +166,8 @@ export async function saveDatabase(tgPayload = null) {
       headers: {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache'
+        'Pragma': 'no-cache',
+        'X-Admin-Token': adminToken
       },
       body: JSON.stringify(payload)
     });

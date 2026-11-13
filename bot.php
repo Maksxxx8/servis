@@ -19,10 +19,19 @@ require_once __DIR__ . '/db.php';
 header('Content-Type: application/json; charset=utf-8');
 
 $db = CRM_DB::getInstance();
-$state = $db->getState();
+$state = $db->getState(true);
 $botToken = $state['salon']['tgBotToken'] ?? '';
 
 // =================== 1. АДМІНІСТРАТИВНІ GET-ДІЇ (Тест та Налаштування) ===================
+if (isset($_GET['action'])) {
+    if (session_status() === PHP_SESSION_NONE) @session_start();
+    $adminToken = $_SERVER['HTTP_X_ADMIN_TOKEN'] ?? ($_SESSION['salon_admin_token'] ?? ($_GET['admin_token'] ?? ''));
+    if (!$db->verifyAdminToken($adminToken)) {
+        http_response_code(401);
+        echo json_encode(['ok' => false, 'error' => 'Доступ заборонено: потрібна авторизація адміністратора (X-Admin-Token)'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
 
 // Встановлення Webhook у Telegram: bot.php?action=set_webhook
 if (isset($_GET['action']) && $_GET['action'] === 'set_webhook') {

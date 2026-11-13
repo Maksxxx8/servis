@@ -19,7 +19,7 @@ export function renderSettingsForm() {
   f('set-admin-pin', state.db.salon.adminPin || '1234');
   f('set-tg-token', state.db.salon.tgBotToken || '');
   f('set-tg-chat-id', state.db.salon.tgChatId || '');
-  f('set-google-key-path', state.db.salon.googleKeyPath || '/opt/Keys/servis-calendar-sync-514520-60482c5cddc7.json');
+  f('set-google-key-path', state.db.salon.googleKeyPath || '');
   f('set-google-cal-id', state.db.salon.googleCalendarId || '');
 
   // Кнопка тесту Telegram
@@ -35,7 +35,10 @@ export function renderSettingsForm() {
       testTgBtn.disabled = true;
       testTgBtn.textContent = '⏳ Відправка...';
       try {
-        const res = await fetch(`bot.php?action=test_send&chat_id=${encodeURIComponent(chatId)}`);
+        const adminTok = sessionStorage.getItem('salon_admin_token') || '';
+        const res = await fetch(`bot.php?action=test_send&chat_id=${encodeURIComponent(chatId)}`, {
+          headers: { 'X-Admin-Token': adminTok }
+        });
         const json = await res.json();
         if (json.ok) {
           alert('✅ Тестове сповіщення успішно надіслано в Telegram!');
@@ -72,8 +75,11 @@ export function renderSettingsForm() {
           }
         }
 
+        const adminTok = sessionStorage.getItem('salon_admin_token') || '';
         const url = `api-v2.php?action=test_google_calendar&key_path=${encodeURIComponent(keyPath)}&calendar_id=${encodeURIComponent(calId)}`;
-        const res = await fetch(url);
+        const res = await fetch(url, {
+          headers: { 'X-Admin-Token': adminTok }
+        });
         const json = await res.json();
         if (json.ok) {
           let msg = `✅ Сервісний аккаунт Google успішно авторизовано!\n\nEmail робота: ${json.service_account_email}`;
@@ -196,7 +202,7 @@ export async function saveSalonSettings() {
   state.db.salon.adminPin = pinVal;
   state.db.salon.tgBotToken = $('set-tg-token').value.trim();
   state.db.salon.tgChatId = $('set-tg-chat-id') ? $('set-tg-chat-id').value.trim() : '';
-  state.db.salon.googleKeyPath = $('set-google-key-path') ? $('set-google-key-path').value.trim() : '/opt/Keys/servis-calendar-sync-514520-60482c5cddc7.json';
+  state.db.salon.googleKeyPath = $('set-google-key-path') ? $('set-google-key-path').value.trim() : '';
   state.db.salon.googleCalendarId = $('set-google-cal-id') ? $('set-google-cal-id').value.trim() : '';
 
   const ok = await saveDatabase();

@@ -27,9 +27,9 @@ class GoogleCalendarService {
     }
 
     private function __construct(?string $customKeyPath = null) {
-        // Стандартний шлях до ключа або шлях із налаштувань
-        $this->keyPath = $customKeyPath 
-            ?: (CRM_DB::getInstance()->getState()['salon']['googleKeyPath'] ?? '/opt/Keys/servis-calendar-sync-514520-60482c5cddc7.json');
+        // Шлях до ключа із налаштувань салону або нейтральний системний шлях
+        $savedPath = CRM_DB::getInstance()->getState(true)['salon']['googleKeyPath'] ?? '';
+        $this->keyPath = $customKeyPath ?: ($savedPath ?: '/etc/salon/google-service-account.json');
 
         if (file_exists($this->keyPath) && is_readable($this->keyPath)) {
             $raw = @file_get_contents($this->keyPath);

@@ -160,6 +160,19 @@ class CRM_DB {
                 sent_at DATETIME
             );
             CREATE INDEX IF NOT EXISTS idx_tq_status ON telegram_queue(status);
+
+            CREATE TABLE IF NOT EXISTS admin_sessions (
+                token VARCHAR(64) PRIMARY KEY,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                expires_at DATETIME NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip VARCHAR(45) NOT NULL,
+                attempt_time DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip, attempt_time);
         ");
 
         // Автоматична міграція існуючих таблиць (якщо вони вже створені на сервері)
@@ -304,12 +317,107 @@ class CRM_DB {
     }
 
     /**
-     * Отримати повний стан CRM у форматі JSON для фронтенду
+     * Перевірка PIN-коду адміністратора
      */
-    public function getState(): array {
+    public function verifyAdminPin(string $pin): bool {
+        try {
+            $stmt = $this->pdo->prepare("SELECT value FROM salon_settings WHERE key = 'adminPin'");
+            $stmt->execute();
+            $savedPin = $stmt->fetchColumn();
+            if ($savedPin === false || $savedPin === null || $savedPin === '') {
+                $savedPin = '1234';
+            }
+            return hash_equals((string)$savedPin, (string)$pin);
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Створити криптографічну сесію адміністратора
+     */
+    public function createAdminSession(int $lifetimeHours = 48): string {
+        $token = bin2hex(random_bytes(32));
+        $stmt = $this->pdo->prepare("
+            INSERT INTO admin_sessions (token, expires_at) 
+            VALUES (:token, datetime('now', '+' || :hours || ' hours'))
+        ");
+        $stmt->execute([':token' => $token, ':hours' => $lifetimeHours]);
+        return $token;
+    }
+
+    /**
+     * Перевірити валідність токена адміністратора
+     */
+    public function verifyAdminToken(?string $token): bool {
+        if (empty($token) || strlen($token) < 16) {
+            return false;
+        }
+        try {
+            // Очищення прострочених сесій з шансом 5%
+            if (mt_rand(1, 20) === 1) {
+                $this->pdo->exec("DELETE FROM admin_sessions WHERE expires_at < datetime('now')");
+            }
+
+            $stmt = $this->pdo->prepare("
+                SELECT 1 FROM admin_sessions 
+                WHERE token = :token AND expires_at > datetime('now')
+            ");
+            $stmt->execute([':token' => $token]);
+            return (bool)$stmt->fetchColumn();
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Завершити сесію адміністратора (Logout)
+     */
+    public function deleteAdminSession(string $token): void {
+        try {
+            $stmt = $this->pdo->prepare("DELETE FROM admin_sessions WHERE token = :token");
+            $stmt->execute([':token' => $token]);
+        } catch (Exception $e) {}
+    }
+
+    /**
+     * Захист від brute-force підбору PIN-коду (Rate Limiting)
+     */
+    public function isRateLimited(string $ip, int $maxAttempts = 5, int $windowMinutes = 5): bool {
+        try {
+            $stmt = $this->pdo->prepare("
+                SELECT count(*) FROM login_attempts 
+                WHERE ip = :ip AND attempt_time > datetime('now', '-' || :mins || ' minutes')
+            ");
+            $stmt->execute([':ip' => $ip, ':mins' => $windowMinutes]);
+            $attempts = (int)$stmt->fetchColumn();
+            return $attempts >= $maxAttempts;
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+
+    public function recordFailedLogin(string $ip): void {
+        try {
+            $stmt = $this->pdo->prepare("INSERT INTO login_attempts (ip) VALUES (:ip)");
+            $stmt->execute([':ip' => $ip]);
+        } catch (Exception $e) {}
+    }
+
+    public function clearFailedLogins(string $ip): void {
+        try {
+            $stmt = $this->pdo->prepare("DELETE FROM login_attempts WHERE ip = :ip");
+            $stmt->execute([':ip' => $ip]);
+        } catch (Exception $e) {}
+    }
+
+    /**
+     * Отримати стан CRM у форматі JSON (публічний або повний адмінський)
+     */
+    public function getState(bool $isAdmin = false): array {
         // 1. Салон
         $salonRows = $this->pdo->query("SELECT key, value FROM salon_settings")->fetchAll();
-        $salon = [
+        $allSalon = [
             'name' => 'Beauty Studio • Світлана & Марія',
             'address' => 'м. Дніпро • Щодня 09:00–20:00',
             'workStart' => 9,
@@ -317,37 +425,57 @@ class CRM_DB {
             'adminPin' => '1234',
             'tgBotToken' => '',
             'tgChatId' => '',
-            'googleKeyPath' => '/opt/Keys/servis-calendar-sync-514520-60482c5cddc7.json',
-            'googleCalendarId' => ''
+            'googleKeyPath' => '',
+            'googleCalendarId' => '',
+            'smtpHost' => '',
+            'smtpPort' => 465,
+            'smtpUser' => '',
+            'smtpPass' => '',
+            'smtpSecure' => 'ssl'
         ];
         foreach ($salonRows as $r) {
             $k = $r['key'];
             $v = $r['value'];
-            if (in_array($k, ['workStart', 'workEnd'])) {
-                $salon[$k] = (int)$v;
+            if (in_array($k, ['workStart', 'workEnd', 'smtpPort'])) {
+                $allSalon[$k] = (int)$v;
             } else {
-                $salon[$k] = $v;
+                $allSalon[$k] = $v;
             }
+        }
+
+        if ($isAdmin) {
+            $salon = $allSalon;
+        } else {
+            // Публічні дані для клієнтів (БЕЗ токенів, паролів, ключів та PIN!)
+            $salon = [
+                'name' => $allSalon['name'],
+                'address' => $allSalon['address'],
+                'workStart' => $allSalon['workStart'],
+                'workEnd' => $allSalon['workEnd']
+            ];
         }
 
         // 2. Майстри
         $masterRows = $this->pdo->query("SELECT * FROM masters WHERE is_active = 1 ORDER BY sort_order ASC, id ASC")->fetchAll();
         $masters = [];
         foreach ($masterRows as $m) {
-            $masters[] = [
+            $mItem = [
                 'id' => $m['id'],
                 'name' => $m['name'],
                 'role' => $m['role'] ?? '',
                 'bio' => $m['bio'] ?? '',
                 'avatar' => $m['avatar'] ?? '✨',
-                'tgChatId' => $m['tg_chat_id'] ?? '',
-                'googleCalendarId' => $m['google_calendar_id'] ?? '',
                 'slotStep' => (int)($m['slot_step'] ?? 30),
                 'globalBuffer' => (int)($m['global_buffer'] ?? 15),
-                'icalKey' => $m['ical_key'] ?? ('key_' . $m['id']),
                 'weeklySchedule' => !empty($m['weekly_schedule']) ? json_decode($m['weekly_schedule'], true) : new stdClass(),
                 'dateOverrides' => !empty($m['date_overrides']) ? json_decode($m['date_overrides'], true) : new stdClass()
             ];
+            if ($isAdmin) {
+                $mItem['tgChatId'] = $m['tg_chat_id'] ?? '';
+                $mItem['googleCalendarId'] = $m['google_calendar_id'] ?? '';
+                $mItem['icalKey'] = $m['ical_key'] ?? ('key_' . $m['id']);
+            }
+            $masters[] = $mItem;
         }
 
         // 3. Послуги
@@ -369,7 +497,7 @@ class CRM_DB {
         $appRows = $this->pdo->query("SELECT * FROM appointments ORDER BY date ASC, time ASC")->fetchAll();
         $appointments = [];
         foreach ($appRows as $a) {
-            $appointments[] = [
+            $appItem = [
                 'id' => $a['id'],
                 'masterId' => $a['master_id'],
                 'serviceIds' => !empty($a['service_ids']) ? json_decode($a['service_ids'], true) : [],
@@ -377,17 +505,28 @@ class CRM_DB {
                 'time' => $a['time'],
                 'duration' => (int)$a['duration'],
                 'bufferTime' => (int)$a['buffer_time'],
-                'price' => (float)$a['price'],
-                'clientName' => $a['client_name'],
-                'clientPhone' => $a['client_phone'],
-                'clientEmail' => $a['client_email'] ?? '',
-                'status' => $a['status'] ?? 'confirmed',
-                'googleEventId' => $a['google_event_id'] ?? null,
-                'verificationToken' => $a['verification_token'] ?? null,
-                'isVerified' => (int)($a['is_verified'] ?? 0),
-                'replacesLunch' => (int)($a['replaces_lunch'] ?? 0),
-                'notes' => $a['notes'] ?? ''
+                'status' => $a['status'] ?? 'confirmed'
             ];
+            if ($isAdmin) {
+                // Повні конфіденційні дані для авторизованого адміна
+                $appItem['price'] = (float)$a['price'];
+                $appItem['clientName'] = $a['client_name'];
+                $appItem['clientPhone'] = $a['client_phone'];
+                $appItem['clientEmail'] = $a['client_email'] ?? '';
+                $appItem['googleEventId'] = $a['google_event_id'] ?? null;
+                $appItem['verificationToken'] = $a['verification_token'] ?? null;
+                $appItem['isVerified'] = (int)($a['is_verified'] ?? 0);
+                $appItem['replacesLunch'] = (int)($a['replaces_lunch'] ?? 0);
+                $appItem['notes'] = $a['notes'] ?? '';
+            } else {
+                // Публічний вигляд: приховуємо імена, номери телефонів та особисті нотатки клієнтів
+                $appItem['clientName'] = 'Зайнято';
+                $appItem['clientPhone'] = '';
+                $appItem['clientEmail'] = '';
+                $appItem['notes'] = '';
+                $appItem['price'] = 0;
+            }
+            $appointments[] = $appItem;
         }
 
         // 5. Технічні перерви (TimeBlocks)
@@ -400,11 +539,12 @@ class CRM_DB {
                 'date' => $tb['date'],
                 'startTime' => $tb['start_time'],
                 'endTime' => $tb['end_time'],
-                'reason' => $tb['reason'] ?? ''
+                'reason' => $isAdmin ? ($tb['reason'] ?? '') : 'Перерва'
             ];
         }
 
         return [
+            'isAdmin' => $isAdmin,
             'salon' => $salon,
             'masters' => $masters,
             'services' => $services,

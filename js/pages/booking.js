@@ -7,7 +7,7 @@ import state from '../state.js';
 import { $, show, hide, toggle } from '../utils/dom.js';
 import { todayStr } from '../config.js';
 import { timeToMin } from '../utils/time.js';
-import { saveDatabase } from '../http/api-client.js';
+import { saveDatabase, createClientBooking } from '../http/api-client.js';
 import { calculateAvailableSlots, findNextAvailableDays, getMasterDaySchedule, generateGoogleCalendarUrl, downloadIcsFile } from '../utils/schedule.js';
 
 let lastCreatedBooking = null;
@@ -379,32 +379,9 @@ export async function submitClientBooking() {
   lastCreatedBooking = newBooking;
   state.db.appointments.push(newBooking);
 
-  const tgMessage = `🔔 <b>Новий онлайн-запис!</b>
-Майстер: <b>${master.name}</b>
-Послуги: ${selectedObjs.map(s => s.title).join(', ')}
-Дата: <b>${newBooking.date} о ${newBooking.time}</b> (тривалість: ${totalDur} хв)
-Клієнт: ${name} (${phoneCheck.formatted})
-Email: ${emailCheck.clean}
-Сума: ${totalPrice} ₴
-${comment ? 'Коментар: ' + comment : ''}
-⚠️ <i>Очікує підтвердження Email клієнтом</i>`;
+  const saveRes = await createClientBooking(newBooking, honeypot ? honeypot.value : '');
 
-  const saveRes = await saveDatabase({ 
-    chatId: master.tgChatId || state.db.salon.tgChatId, 
-    message: tgMessage,
-    appointmentId: newBooking.id,
-    emailPayload: {
-      email: emailCheck.clean,
-      appointmentId: newBooking.id,
-      clientName: name,
-      masterName: master.name,
-      services: selectedObjs.map(s => s.title).join(', '),
-      date: newBooking.date,
-      time: newBooking.time
-    }
-  });
-
-  if (!saveRes) {
+  if (!saveRes || !saveRes.ok) {
     state.db.appointments = state.db.appointments.filter(a => a.id !== newBooking.id);
     state.notify();
     return;

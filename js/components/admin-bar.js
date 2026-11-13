@@ -19,6 +19,10 @@ let currentView = 'client';
  * Перемкнути вид (client | calendar | schedule | settings | clients)
  */
 export function switchView(view) {
+  if (view !== 'client' && !state.isAdmin) {
+    import('./pin-modal.js').then(m => m.openPinModal());
+    return;
+  }
   currentView = view;
   ['client', 'calendar', 'schedule', 'settings', 'clients'].forEach(v => {
     const viewEl = $(`view-${v}`);
