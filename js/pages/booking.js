@@ -274,11 +274,17 @@ export async function submitClientBooking() {
 Сума: ${totalPrice} ₴
 ${comment ? 'Коментар: ' + comment : ''}`;
 
-  await saveDatabase({ 
+  const ok = await saveDatabase({ 
     chatId: master.tgChatId || state.db.salon.tgChatId, 
     message: tgMessage,
     appointmentId: newBooking.id 
   });
+
+  if (!ok) {
+    state.db.appointments = state.db.appointments.filter(a => a.id !== newBooking.id);
+    state.notify();
+    return;
+  }
 
   const successEl = $('success-details');
   if (successEl) {

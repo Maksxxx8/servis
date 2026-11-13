@@ -186,6 +186,7 @@ export function renderSettingsForm() {
 
 export async function saveSalonSettings() {
   const pinVal = $('set-admin-pin').value.trim() || '1234';
+  const prevSalon = JSON.parse(JSON.stringify(state.db.salon));
   state.db.salon.name = $('set-salon-name').value.trim() || 'Beauty Studio';
   state.db.salon.address = $('set-salon-address').value.trim();
   state.db.salon.workStart = Number($('set-work-start').value) || 9;
@@ -195,11 +196,18 @@ export async function saveSalonSettings() {
   state.db.salon.tgChatId = $('set-tg-chat-id') ? $('set-tg-chat-id').value.trim() : '';
   state.db.salon.googleKeyPath = $('set-google-key-path') ? $('set-google-key-path').value.trim() : '/opt/Keys/servis-calendar-sync-514520-60482c5cddc7.json';
   state.db.salon.googleCalendarId = $('set-google-cal-id') ? $('set-google-cal-id').value.trim() : '';
-  await saveDatabase();
+
+  const ok = await saveDatabase();
+  if (!ok) {
+    state.db.salon = prevSalon;
+    state.notify();
+    return;
+  }
   alert(`Налаштування салону збережено!\nНовий PIN-код для входу майстрів: ${state.db.salon.adminPin}`);
 }
 
 export async function saveMastersSettings() {
+  const prevMasters = JSON.parse(JSON.stringify(state.db.masters));
   state.db.masters.forEach(m => {
     const nameEl = $(`m-name-${m.id}`);
     const roleEl = $(`m-role-${m.id}`);
@@ -212,7 +220,13 @@ export async function saveMastersSettings() {
     if (tgEl) m.tgChatId = tgEl.value.trim();
     if (gcalEl) m.googleCalendarId = gcalEl.value.trim();
   });
-  await saveDatabase();
+
+  const ok = await saveDatabase();
+  if (!ok) {
+    state.db.masters = prevMasters;
+    state.notify();
+    return;
+  }
   alert('Профілі майстрів оновлено!');
 }
 

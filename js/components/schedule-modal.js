@@ -84,6 +84,7 @@ export async function saveTimeBlockFromModal() {
 
   const applySave = async () => {
     if (!state.db.timeBlocks) state.db.timeBlocks = [];
+    const prevTimeBlocks = [...state.db.timeBlocks];
     state.db.timeBlocks.push({
       id: 'tb_' + Date.now(),
       masterId,
@@ -92,8 +93,13 @@ export async function saveTimeBlockFromModal() {
       endTime,
       reason
     });
+    const ok = await saveDatabase();
+    if (!ok) {
+      state.db.timeBlocks = prevTimeBlocks;
+      state.notify();
+      return;
+    }
     closeTimeBlockModal();
-    await saveDatabase();
   };
 
   if (conflicts.length > 0) {
@@ -105,8 +111,13 @@ export async function saveTimeBlockFromModal() {
 
 export async function deleteTimeBlock(tbId) {
   if (!confirm('Видалити цю перерву?')) return;
+  const prevTimeBlocks = [...(state.db.timeBlocks || [])];
   state.db.timeBlocks = (state.db.timeBlocks || []).filter(tb => tb.id !== tbId);
-  await saveDatabase();
+  const ok = await saveDatabase();
+  if (!ok) {
+    state.db.timeBlocks = prevTimeBlocks;
+    state.notify();
+  }
 }
 
 // =================== 3. МОДАЛКА ВИНЯТКУ ДАТИ (dateOverrides) ===================
@@ -159,9 +170,15 @@ export async function saveDateOverrideFromModal() {
   if (!master.dateOverrides) master.dateOverrides = {};
 
   if (isReset) {
+    const prevOverrides = JSON.parse(JSON.stringify(master.dateOverrides || {}));
     delete master.dateOverrides[dateStr];
+    const ok = await saveDatabase();
+    if (!ok) {
+      master.dateOverrides = prevOverrides;
+      state.notify();
+      return;
+    }
     closeDateOverrideModal();
-    await saveDatabase();
     return;
   }
 
@@ -177,9 +194,15 @@ export async function saveDateOverrideFromModal() {
   const conflicts = detectScheduleConflicts(masterId, dateStr, proposedChange, state.db);
 
   const applySave = async () => {
+    const prevOverrides = JSON.parse(JSON.stringify(master.dateOverrides || {}));
     master.dateOverrides[dateStr] = proposedChange;
+    const ok = await saveDatabase();
+    if (!ok) {
+      master.dateOverrides = prevOverrides;
+      state.notify();
+      return;
+    }
     closeDateOverrideModal();
-    await saveDatabase();
   };
 
   if (conflicts.length > 0) {

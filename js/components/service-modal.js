@@ -60,6 +60,7 @@ export async function saveServiceFromModal() {
 
   const payload = { id: id || ('s' + Date.now()), masterId, title, duration, bufferTime, price };
 
+  const prevServices = [...state.db.services];
   if (id) {
     const idx = state.db.services.findIndex(x => x.id === id);
     if (idx > -1) state.db.services[idx] = payload;
@@ -67,8 +68,14 @@ export async function saveServiceFromModal() {
     state.db.services.push(payload);
   }
 
+  const ok = await saveDatabase();
+  if (!ok) {
+    state.db.services = prevServices;
+    state.notify();
+    return;
+  }
+
   closeServiceModal();
-  await saveDatabase();
 }
 
 /**
@@ -77,8 +84,13 @@ export async function saveServiceFromModal() {
  */
 export async function deleteService(serviceId) {
   if (!confirm('Видалити цю послугу з прайсу?')) return;
+  const prevServices = [...state.db.services];
   state.db.services = state.db.services.filter(s => s.id !== serviceId);
-  await saveDatabase();
+  const ok = await saveDatabase();
+  if (!ok) {
+    state.db.services = prevServices;
+    state.notify();
+  }
 }
 
 /**

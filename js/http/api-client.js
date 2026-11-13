@@ -99,8 +99,6 @@ export async function loadDatabase(silent = false) {
  * @param {Object|null} tgPayload — об'єкт { chatId, message } для Telegram-сповіщення
  */
 export async function saveDatabase(tgPayload = null) {
-  localStorage.setItem('salon_crm_db_uk', JSON.stringify(state.db));
-
   try {
     const payload = JSON.parse(JSON.stringify(state.db));
     if (tgPayload) payload._notify_telegram = tgPayload;
@@ -122,37 +120,38 @@ export async function saveDatabase(tgPayload = null) {
 
         // Оновлюємо googleEventId у клієнтському стейті без перезавантаження сторінки
         if (data.google_event_ids && Array.isArray(state.db.appointments)) {
-          let updatedGids = false;
           for (const app of state.db.appointments) {
             if (data.google_event_ids[app.id] && app.googleEventId !== data.google_event_ids[app.id]) {
               app.googleEventId = data.google_event_ids[app.id];
-              updatedGids = true;
             }
           }
-          if (updatedGids) {
-            localStorage.setItem('salon_crm_db_uk', JSON.stringify(state.db));
-          }
         }
+        localStorage.setItem('salon_crm_db_uk', JSON.stringify(state.db));
+        state.notify();
+        return true;
       } else {
         state.serverConnected = false;
         console.error('Помилка сервера при збереженні:', data);
+        alert('❌ Помилка сервера: ' + (data?.error || 'не вдалося зберегти дані на сервері.'));
+        state.notify();
+        return false;
       }
     } else {
       state.serverConnected = false;
       const errData = await res.json().catch(() => null);
-      if (errData && errData.error) {
-        console.error('Помилка запису на сервері:', errData.error);
-        if (state.isAdmin && !silentSaveNoticeShown) {
-          silentSaveNoticeShown = true;
-          alert('⚠️ ' + errData.error + (errData.fix_command ? '\n\nКоманда для VPS:\n' + errData.fix_command : ''));
-        }
-      }
+      const errMsg = errData && errData.error ? errData.error : `Помилка сервера (HTTP ${res.status})`;
+      console.error('Помилка запису на сервері:', errMsg);
+      alert('❌ ' + errMsg + (errData && errData.fix_command ? '\n\nКоманда для VPS:\n' + errData.fix_command : ''));
+      state.notify();
+      return false;
     }
   } catch (e) {
     state.serverConnected = false;
+    console.error('Помилка зв\'язку з сервером при збереженні:', e);
+    alert('❌ Помилка: Немає зв\'язку з сервером! Дія не збереглася на сервері. Перевірте інтернет-з\'єднання або роботу сервера.');
+    state.notify();
+    return false;
   }
-
-  state.notify();
 }
 
 /**

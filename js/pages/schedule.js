@@ -302,8 +302,13 @@ export function renderScheduleCabinet() {
   container.querySelectorAll('[data-del-override]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const dt = btn.dataset.delOverride;
+      const prevOverrides = JSON.parse(JSON.stringify(master.dateOverrides || {}));
       delete master.dateOverrides[dt];
-      await saveDatabase();
+      const ok = await saveDatabase();
+      if (!ok) {
+        master.dateOverrides = prevOverrides;
+        return;
+      }
       renderScheduleCabinet();
     });
   });
@@ -332,6 +337,10 @@ export function renderScheduleCabinet() {
 
   // Збереження графіка майстра
   $('btn-save-master-schedule')?.addEventListener('click', async () => {
+    const prevBuf = master.globalBuffer;
+    const prevStep = master.slotStep;
+    const prevWeekly = JSON.parse(JSON.stringify(master.weeklySchedule || {}));
+
     master.globalBuffer = Number($('set-master-buffer').value) || 15;
     master.slotStep = Number($('set-master-step').value) || 30;
 
@@ -362,7 +371,14 @@ export function renderScheduleCabinet() {
       };
     });
 
-    await saveDatabase();
+    const ok = await saveDatabase();
+    if (!ok) {
+      master.globalBuffer = prevBuf;
+      master.slotStep = prevStep;
+      master.weeklySchedule = prevWeekly;
+      renderScheduleCabinet();
+      return;
+    }
     alert(`Графік та буфери для майстра ${master.name} успішно збережено!`);
     renderScheduleCabinet();
   });

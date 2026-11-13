@@ -17,13 +17,9 @@
   <div id="admin-bar" class="hidden bg-slate-900 text-white px-4 py-2.5 text-sm shadow-md sticky top-0 z-50">
     <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-3">
-        <span class="text-xs font-semibold tracking-wide flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1 rounded-lg border border-slate-700/60" title="Статус синхронізації з сервером">
-          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" id="server-indicator"></span>
-          <span id="server-status-text">Онлайн</span>
-        </span>
         <div class="flex flex-wrap bg-slate-800 rounded-lg p-0.5 text-xs gap-1">
           <button id="tab-client" class="px-3 py-1.5 rounded-md transition">📱 Віджет клієнта</button>
-          <button id="tab-calendar" class="px-3 py-1.5 rounded-md transition bg-indigo-600 text-white font-medium">📅 Шахівниця</button>
+          <button id="tab-calendar" class="px-3 py-1.5 rounded-md transition bg-indigo-600 text-white font-medium">📅 Календар</button>
           <button id="tab-schedule" class="px-3 py-1.5 rounded-md transition text-slate-300 hover:text-white">🗓️ Графік та Буфери</button>
           <button id="tab-settings" class="px-3 py-1.5 rounded-md transition text-slate-300 hover:text-white">⚙️ Налаштування</button>
           <button id="tab-clients" class="px-3 py-1.5 rounded-md transition text-slate-300 hover:text-white">👥 Клієнти</button>
@@ -369,7 +365,7 @@
     <div class="bg-white rounded-2xl max-w-xs w-full p-5 shadow-2xl space-y-4 text-center">
       <div class="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto text-xl">🔒</div>
       <h3 class="font-bold text-base">Вхід для майстрів</h3>
-      <p class="text-xs text-slate-500">Введіть PIN-код адміністратора для доступу до шахівниці та налаштувань</p>
+      <p class="text-xs text-slate-500">Введіть PIN-код адміністратора для доступу до календаря та налаштувань</p>
       <input type="password" id="pin-input" placeholder="••••" class="w-full text-center text-xl tracking-widest border rounded-xl py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500">
       <div class="flex gap-2">
         <button data-action="close-pin" class="flex-1 py-2.5 rounded-xl border text-xs font-semibold">Скасувати</button>

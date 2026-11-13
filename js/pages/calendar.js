@@ -1,5 +1,5 @@
 /**
- * pages/calendar.js — Шахівниця розкладу (адмінка) з підтримкою 3 режимів:
+ * pages/calendar.js — Календар розкладу (адмінка) з підтримкою 3 режимів:
  * 1. День (погодинна сітка, всі майстри / 1 майстер, штриховка неробочих годин, блоки буферів)
  * 2. Тиждень (7 колонок Пн–Нд, сірий фон на вихідні, швидкий запис/перерва)
  * 3. Місяць (сітка 5–6 тижнів, індикатори змін майстрів, перехід на день, швидка зміна графіка)
@@ -176,7 +176,6 @@ function renderDayView(container) {
           <span>${m.avatar || '👤'} ${m.name}</span>
           ${badge}
         </div>
-        <button type="button" data-day-override-quick="${m.id}|${currentDateStr}" class="text-[11px] text-indigo-600 hover:underline shrink-0 ml-2">⚙️ Графік</button>
       </div>
     `;
   }).join('');
@@ -336,8 +335,14 @@ function bindDayEvents(container) {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (confirm('Видалити цю перерву?')) {
+        const prevTb = [...(state.db.timeBlocks || [])];
         state.db.timeBlocks = (state.db.timeBlocks || []).filter(tb => tb.id !== btn.dataset.delTbQuick);
         renderAdminCalendar();
+        const ok = await saveDatabase();
+        if (!ok) {
+          state.db.timeBlocks = prevTb;
+          renderAdminCalendar();
+        }
       }
     });
   });

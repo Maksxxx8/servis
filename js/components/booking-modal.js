@@ -1,5 +1,5 @@
 /**
- * components/booking-modal.js — Модальне вікно ручного запису / редагування візиту (шахівниця)
+ * components/booking-modal.js — Модальне вікно ручного запису / редагування візиту (календар)
  * Підтримка буферного часу та експорту в Google Calendar / iCal
  */
 
@@ -132,6 +132,7 @@ export async function saveBookingFromModal() {
     notes: $('modal-booking-notes').value.trim()
   };
 
+  const prevAppointments = [...state.db.appointments];
   if (id) {
     const idx = state.db.appointments.findIndex(a => a.id === id);
     if (idx > -1) state.db.appointments[idx] = entry;
@@ -139,8 +140,14 @@ export async function saveBookingFromModal() {
     state.db.appointments.push(entry);
   }
 
+  const ok = await saveDatabase();
+  if (!ok) {
+    state.db.appointments = prevAppointments;
+    state.notify();
+    return;
+  }
+
   closeBookingModal();
-  await saveDatabase();
 }
 
 /**
@@ -149,9 +156,17 @@ export async function saveBookingFromModal() {
 export async function deleteBookingFromModal() {
   const id = $('modal-booking-id').value;
   if (!confirm('Ви дійсно бажаєте видалити цей запис?')) return;
+  const prevAppointments = [...state.db.appointments];
   state.db.appointments = state.db.appointments.filter(a => a.id !== id);
+
+  const ok = await saveDatabase();
+  if (!ok) {
+    state.db.appointments = prevAppointments;
+    state.notify();
+    return;
+  }
+
   closeBookingModal();
-  await saveDatabase();
 }
 
 /**
